@@ -1,0 +1,5 @@
+numpy
+matplotlib
+# uhd (UHD Python bindings) is typically installed system-wide alongside the
+# UHD driver package rather than via pip -- see
+# https://files.ettus.com/manual/page_install.html

@@ -1,0 +1,205 @@
+#!/usr/bin/env python3
+"""
+Automate a Y-factor NF sweep across the AD9361 gain table on a USRP B210.
+
+Requires: UHD Python API (`import uhd`), numpy.
+
+This script has NOT been run against real hardware in this environment (no
+B210 / UHD install available here) -- validate on your bench before trusting
+logged data. Review docs/measurement_manual.md before running.
+
+Usage:
+    python run_nf_sweep.py --freq 920e6 \
+        --gain-table docs/gain_tables/gain_table_200_1300MHz.csv \
+        --enr-source-db 15.2 --atten-db 30.15 --cable-db 1.05 \
+        --out data/raw/nf_920MHz_2026-09-12.csv
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).parent))
+from nf_yfactor import PathLoss, enr_at_rx1, noise_figure_db  # noqa: E402
+
+CSV_FIELDS = [
+    "Gain_Index",
+    "Total_Gain_dB",
+    "RX_Gain_UHD_dB",
+    "Freq_MHz",
+    "P_cold_dBm",
+    "P_hot_dBm",
+    "NF_dB",
+]
+
+
+def load_gain_table(path: str) -> list[tuple[int, float]]:
+    rows = []
+    with open(path, newline="") as f:
+        reader = csv.DictReader(f)
+        for r in reader:
+            idx = int(r["Gain_Index"])
+            raw = (r["Total_Gain_dB"] or "").strip()
+            if raw == "":
+                raise ValueError(
+                    f"Gain table {path} has an empty Total_Gain_dB at "
+                    f"Gain_Index={idx}. Populate the table from the AD9361 "
+                    "reference manual before running the sweep -- see "
+                    "docs/gain_tables/README.md."
+                )
+            rows.append((idx, float(raw)))
+    rows.sort(key=lambda t: t[0])
+    return rows
+
+
+def measure_power_dbm(samples: np.ndarray, dbm_offset: float) -> float:
+    """
+    Average power of a complex IQ capture, in raw dB relative to full scale,
+    corrected by the per-gain dBm_offset from the absolute power calibration
+    (docs/calibration_procedure.md section 6).
+    """
+    power_lin = np.mean(np.abs(samples) ** 2)
+    if power_lin <= 0:
+        raise ValueError("Captured all-zero samples; check RX path/gain settings.")
+    raw_db = 10 * np.log10(power_lin)
+    return raw_db + dbm_offset
+
+
+def capture_power(usrp, duration_s: float, dbm_offset: float) -> float:
+    """Capture `duration_s` seconds of IQ and return average power in dBm."""
+    import uhd  # local import: only required when actually running on hardware
+
+    st_args = uhd.usrp.StreamArgs("fc32", "sc16")
+    st_args.channels = [0]
+    rx_streamer = usrp.get_rx_stream(st_args)
+
+    num_samps = int(duration_s * usrp.get_rx_rate())
+    buf = np.zeros(num_samps, dtype=np.complex64)
+
+    stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.num_done)
+    stream_cmd.num_samps = num_samps
+    stream_cmd.stream_now = True
+    rx_streamer.issue_stream_cmd(stream_cmd)
+
+    md = uhd.types.RXMetadata()
+    recv_buffer = np.zeros((1, rx_streamer.get_max_num_samps()), dtype=np.complex64)
+    total = 0
+    while total < num_samps:
+        n = rx_streamer.recv(recv_buffer, md)
+        if md.error_code != uhd.types.RXMetadataErrorCode.none:
+            raise RuntimeError(f"UHD RX error: {md.error_code}")
+        chunk = min(n, num_samps - total)
+        buf[total:total + chunk] = recv_buffer[0, :chunk]
+        total += chunk
+
+    return measure_power_dbm(buf, dbm_offset)
+
+
+def prompt_noise_source(state: str) -> None:
+    """
+    Manual noise-source control fallback. If your noise source has a GPIO or
+    USB control line, replace this with a direct hardware call instead of a
+    manual prompt (e.g. drive a UHD GPIO bank pin, or a USB-relay call).
+    """
+    input(f"--> Set noise source {state} and press Enter to continue...")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--freq", type=float, required=True, help="Center frequency in Hz")
+    ap.add_argument("--gain-table", type=str, required=True)
+    ap.add_argument("--enr-source-db", type=float, required=True,
+                     help="Noise source ENR at this frequency, from its cal cert")
+    ap.add_argument("--atten-db", type=float, required=True,
+                     help="Measured attenuator loss at this frequency")
+    ap.add_argument("--cable-db", type=float, required=True,
+                     help="Measured cable loss at this frequency")
+    ap.add_argument("--dbm-offset", type=float, default=0.0,
+                     help="Absolute power calibration offset (docs/calibration_procedure.md sec 6). "
+                          "If 0, results are NOT calibrated to absolute dBm -- Y-factor ratio is "
+                          "still valid since the offset cancels in P_hot - P_cold, but log a real "
+                          "value if you want absolute power sanity checks.")
+    ap.add_argument("--samp-rate", type=float, default=2e6)
+    ap.add_argument("--capture-s", type=float, default=0.05,
+                     help="Capture duration per hot/cold measurement, seconds")
+    ap.add_argument("--settle-s", type=float, default=0.1,
+                     help="Settle time after gain/freq changes")
+    ap.add_argument("--noise-source-gpio", action="store_true",
+                     help="If set, expects a GPIO control function instead of manual prompts "
+                          "(not implemented here -- wire up your hardware in control_noise_source())")
+    ap.add_argument("--out", type=str, required=True)
+    ap.add_argument("--dry-run", action="store_true",
+                     help="Skip UHD hardware calls; useful to sanity-check the gain table and CSV output")
+    args = ap.parse_args()
+
+    gain_table = load_gain_table(args.gain_table)
+    path_loss = PathLoss(attenuator_db=args.atten_db, cable_db=args.cable_db)
+    enr_db = enr_at_rx1(args.enr_source_db, path_loss)
+    print(f"ENR referred to RX1: {enr_db:.3f} dB "
+          f"(source {args.enr_source_db:.2f} dB - path loss {path_loss.total_db:.2f} dB)")
+
+    usrp = None
+    if not args.dry_run:
+        import uhd
+        usrp = uhd.usrp.MultiUSRP()
+        usrp.set_rx_rate(args.samp_rate)
+        usrp.set_rx_freq(uhd.types.TuneRequest(args.freq))
+        usrp.set_rx_antenna("RX1")
+        usrp.set_rx_agc(False)
+
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with open(out_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_FIELDS)
+        writer.writeheader()
+
+        for gain_index, total_gain_db in gain_table:
+            if args.dry_run:
+                applied_gain = total_gain_db
+            else:
+                usrp.set_rx_gain(total_gain_db)
+                time.sleep(args.settle_s)
+                applied_gain = usrp.get_rx_gain()
+
+            print(f"[Gain_Index={gain_index}] requested={total_gain_db:.2f} dB "
+                  f"applied={applied_gain:.2f} dB")
+
+            if args.dry_run:
+                p_cold = -80.0
+                p_hot = -77.0
+            else:
+                prompt_noise_source("OFF")
+                time.sleep(args.settle_s)
+                p_cold = capture_power(usrp, args.capture_s, args.dbm_offset)
+
+                prompt_noise_source("ON")
+                time.sleep(args.settle_s)
+                p_hot = capture_power(usrp, args.capture_s, args.dbm_offset)
+
+                prompt_noise_source("OFF")
+
+            nf_db = noise_figure_db(p_hot, p_cold, enr_db)
+
+            writer.writerow({
+                "Gain_Index": gain_index,
+                "Total_Gain_dB": total_gain_db,
+                "RX_Gain_UHD_dB": applied_gain,
+                "Freq_MHz": args.freq / 1e6,
+                "P_cold_dBm": p_cold,
+                "P_hot_dBm": p_hot,
+                "NF_dB": nf_db,
+            })
+            f.flush()
+
+    print(f"Done. Results written to {out_path}")
+
+
+if __name__ == "__main__":
+    main()
