@@ -82,6 +82,17 @@ gain-dependent characterization from live hardware. See
 how this cross-validates against ADI's own (confidential, cited-not-included)
 published NF vs. Gain Index behavior.
 
+`scripts/snr_iq_sweep.py` extends this into the complete step-by-step
+method: per Gain Index it logs SNR, an AD9361 RSSI sensor reading, and a
+software-computed ADC-clipping check, and saves IQ diagnostic plots
+(constellation, I/Q vs time, spectrum) at a subset of gain indices. See
+[docs/snr_iq_method.md](docs/snr_iq_method.md) — including a verified
+finding that UHD's `rssi` sensor is **not live** in manual-gain mode on
+this hardware (confirmed by varying real input power 50 dB at fixed RX
+gain and seeing zero change), and that UHD exposes no raw AD9361 SPI
+register access at all, so genuine LNA/ADC "detector register" readback
+isn't available through this API.
+
 ## CSV Log Schema
 
 ```
