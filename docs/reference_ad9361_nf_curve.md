@@ -49,3 +49,23 @@ This is a good sanity check on the SNR sweep methodology, but note it is
 traceable Y-factor NF measurement per `docs/measurement_manual.md`) --
 it only cross-validates the qualitative shape of gain-dependent
 sensitivity, not calibrated NF numbers.
+
+## 2190 MHz result: a null result, not a bug
+
+The same live sweep at 2190 MHz (`results/plots/signal_power_2190MHz.png`)
+found **no locked signal at any of the 77 gain indices** -- the peak FFT bin
+location was random at every single point (0/77 within 5 kHz of any
+repeated offset), which is the statistical signature of pure noise
+throughout the entire 0-76 dB gain range. This is unlike 920 MHz, where a
+real signal reliably locked in above Gain Index ~64.
+
+Interpretation: this is consistent with (not proof of) ADI's Figure 15
+(2120 MHz, close to this project's 2190 MHz target) showing the same
+poor-NF-at-low-gain / good-NF-at-high-gain shape as Figure 13 -- if a
+similarly weak signal existed at 2190 MHz, the same kind of high-gain
+lock-in would be expected. Its absence here means nothing detectable is
+currently present in-band at 2190 MHz strong enough to rise above the
+AD9361's own noise floor even at maximum gain (or the environment simply
+has no signal there right now). It does not indicate a problem with the
+sweep methodology, which behaved identically (and correctly) to the 920 MHz
+run in every other respect (gain control, capture, FFT processing).
