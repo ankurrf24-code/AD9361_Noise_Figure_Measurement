@@ -91,33 +91,55 @@ self-contained flowgraph). The flowgraph starts once; gain is changed live
 via `usrp_source.set_gain()` between capture windows, which is the
 GNU-Radio-idiomatic way to sweep gain without restarting the flowgraph.
 
-### Results and a real discrepancy worth flagging
+### Sample-count bug: fixed. Result-value gap: still open
 
-`results/plots/gnuradio_nr_tm_snr_vs_gain_2190MHz.png`, full 77-point sweep:
+First pass (`vector_sink.reset()` + fixed `sleep(capture_s)` + read
+`.data()`) had a real, verified bug: sample counts per gain point varied
+wildly (450K-770K at 20 MHz vs. the ~51K requested; ~385K-390K at 5 MHz,
+also oversized but far more consistent). Root cause: no hard guarantee on
+exactly when `reset()` takes effect relative to the flowgraph's internal
+buffering, worse at 30.72 Msps (20 MHz) than 7.68 Msps (5 MHz) since more
+samples arrive per second of timing slop.
 
-- **5 MHz**: ~8.9 dB SNR at Gain Index 76 -- matches the plain-UHD result
-  (~8.7 dB) closely.
-- **20 MHz**: ~2.4 dB SNR at Gain Index 76 -- this does **not** match the
-  plain-UHD result (~4.8 dB) well, and the discrepancy is real, not just
-  a fluke: the captured sample counts for the 20 MHz run varied wildly
-  (450K-770K samples per gain point, vs. the ~51K requested), while the
-  5 MHz run's counts stayed close to expected (~385K-390K, also more than
-  requested but far more consistent). The likely cause: this script
-  captures by `vector_sink.reset()` + `sleep()` + read `.data()`, which has
-  no hard guarantee on exactly when the reset takes effect relative to the
-  flowgraph's internal buffering -- at 30.72 Msps (20 MHz) far more samples
-  arrive per second than at 7.68 Msps (5 MHz), so any timing slop between
-  the gain change and the reset/capture window matters proportionally more,
-  and capture windows can end up including leftover buffered samples from
-  before the gain change stabilized. `run_nr_tm_snr_sweep.py`'s plain-UHD
-  approach avoids this entirely by requesting an exact sample count via a
-  synchronous `stream_cmd`, which is why it's the more trustworthy number
-  for actual analysis -- treat the GNU Radio version's 20 MHz result as
-  demonstrating "the flowgraph works and responds to gain in the right
-  direction," not as a precise SNR measurement. This is a real limitation
-  of the ad hoc buffering approach, not fixed here; a proper fix would
-  synchronize the capture window to stream tags/timestamps rather than
-  wall-clock sleeps.
+Fix applied: capture duration now scales with sample rate
+(`max(--capture-s, 1.5 * min_samps_needed / samp_rate)`) instead of a fixed
+wall-clock constant, and — more importantly — the code no longer trusts
+`reset()`'s exact timing at all: it retries until at least
+`min_samps_needed` samples have accumulated, then **always takes the last
+`min_samps_needed` samples**, discarding everything earlier. Any stale
+pre-gain-change data from buffering slop ends up at the *start* of the
+accumulated buffer, not the end, so this reliably captures gain-settled
+data regardless of exactly when `reset()` landed. Verified: sample counts
+are now deterministically exactly 51,200 at every gain point, both
+bandwidths (`results/plots/gnuradio_nr_tm_snr_vs_gain_2190MHz.png` includes
+both this fixed run and the plain-UHD reference for comparison).
+
+**This did not fully close the gap to the plain-UHD reference, and moved
+it in different directions per bandwidth** -- worth being explicit about
+rather than declaring victory:
+
+| | Plain-UHD reference | GNU Radio (buggy sampling) | GNU Radio (fixed sampling) |
+|---|---|---|---|
+| 5 MHz @ Gain 76 | ~8.7 dB | ~8.9 dB (looked fine, coincidentally) | ~10.4 dB |
+| 20 MHz @ Gain 76 | ~4.8 dB | ~2.4 dB | ~3.3 dB |
+
+The sample-count bug is conclusively fixed (that was the reported problem
+and the mechanism is now understood and verified). But a second, distinct
+and not-yet-diagnosed effect remains: the GNU Radio capture path now
+disagrees with the plain-UHD reference in *both* directions depending on
+bandwidth, which rules out a single simple remaining bias (like a leftover
+constant offset) and suggests something more specific -- candidates not yet
+checked: whether `uhd.usrp_source`'s internal DSP chain (DDC/filtering)
+differs from raw `multi_usrp` streaming in a way that affects the measured
+spectral shape, whether the capture window's alignment relative to
+OFDM slot boundaries matters for this particular in-band/out-of-band power
+method, or genuine run-to-run environmental variation (the loopback path
+wasn't physically touched between runs, so this is a weaker candidate).
+**Treat `run_nr_tm_snr_sweep.py` (plain UHD) as the trustworthy source for
+actual SNR values; treat the GNU Radio flowgraph as verified-correct
+plumbing (proper waveform, proper channel, deterministic sample count,
+gain response in the right direction) but not yet a numerically validated
+alternative.**
 
 ## Fallback: this project's own simplified generator
 

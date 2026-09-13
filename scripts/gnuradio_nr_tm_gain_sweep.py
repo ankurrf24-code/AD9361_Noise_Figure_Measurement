@@ -175,17 +175,41 @@ def main() -> None:
             ])
             writer.writeheader()
 
+            # Time for min_samps_needed samples to arrive at this sample rate,
+            # not a fixed wall-clock constant -- at 30.72 Msps the same fixed
+            # sleep used at 7.68 Msps collects ~4x more (and more variably
+            # timed) data, which is what caused the 20 MHz timing bug.
+            capture_s = max(args.capture_s, (min_samps_needed / samp_rate) * 1.5)
+
             for gain_index in range(args.gain_min, args.gain_max + 1):
                 usrp_source.set_gain(float(gain_index), 0)
                 time.sleep(args.settle_s)
                 applied_gain = usrp_source.get_gain(0)
 
+                # reset() clears the buffer, but there's no hard guarantee on
+                # exactly when it takes effect relative to the flowgraph's
+                # internal buffering (this was the root cause of the 20 MHz
+                # discrepancy: reset()+sleep()+read() gave inconsistent,
+                # sometimes hugely oversized captures at the higher sample
+                # rate). Fix: don't trust the buffer's size or start -- always
+                # discard everything except the newest min_samps_needed
+                # samples, which are the ones most likely to postdate the
+                # gain settling, regardless of exactly when reset() landed or
+                # how much accumulated before/after it.
                 vector_sink.reset()
-                time.sleep(args.capture_s)
-                data = np.array(vector_sink.data(), dtype=np.complex64)
-                if len(data) < min_samps_needed:
-                    time.sleep(args.capture_s)  # one retry if the buffer hasn't filled yet
+                attempts = 0
+                data = np.array([], dtype=np.complex64)
+                while len(data) < min_samps_needed and attempts < 5:
+                    time.sleep(capture_s)
                     data = np.array(vector_sink.data(), dtype=np.complex64)
+                    attempts += 1
+                if len(data) < min_samps_needed:
+                    raise RuntimeError(
+                        f"Gain_Index={gain_index}: only got {len(data)} samples after "
+                        f"{attempts} attempts, need {min_samps_needed} -- flowgraph may "
+                        f"have stalled (check for USB/underflow issues)."
+                    )
+                data = data[-min_samps_needed:]  # freshest samples only, see comment above
 
                 inband_db, outband_db, snr_db = wideband_snr(
                     data, samp_rate, occupied_bw_hz, args.fft_size, args.num_avg, dc_guard_bins
