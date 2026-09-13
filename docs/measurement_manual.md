@@ -84,8 +84,10 @@ The sweep script will refuse to run against a `--gain-table` CSV with blank
 For each target frequency (920 MHz, then 2190 MHz):
 
 1. Set USRP center frequency (`set_rx_freq`) to the target frequency.
-2. Set RX antenna to RX1 (`set_rx_antenna("RX1")` — the B210 also requires
-   selecting the correct daughterboard subdev, typically `A:A`).
+2. Set RX antenna on channel 0 to `RX2` (`set_rx_antenna("RX2")`) — the B210
+   has no literal "RX1" antenna string; this project's "RX1 port" label maps
+   to the `RX2` (dedicated-receive) antenna on channel 0, confirmed against
+   the actual bench wiring. `run_nf_sweep.py --antenna` defaults to this.
 3. Disable AGC (`set_rx_agc(False)`) — gain must be manual and repeatable.
 4. For each gain point `i` in the sweep (0 to 76, or however many device
    reports with `--auto-gain`):

@@ -72,14 +72,17 @@ blocks:
 - name: usrp_source_0
   id: uhd_usrp_source
   parameters:
-    ant0: RX1
+    ant0: RX2
     bw0: '0'
     center_freq0: freq
     clock_rate: '0'
     clock_source0: internal
-    comment: 'RX1 only. Set gain via rx_gain variable -- for the full 0-76
-      gain-index sweep, drive this externally (e.g. scripts/run_nf_sweep.py)
-      rather than by hand-editing this flowgraph per point.'
+    comment: 'Channel 0, antenna RX2 -- this project''s "RX1 port" label,
+      confirmed against the actual bench wiring (there is no literal RX1
+      antenna string on the B210; only TX/RX and RX2 exist). Set gain via
+      rx_gain variable -- for the full 0-76 gain-index sweep, drive this
+      externally (e.g. scripts/run_nf_sweep.py) rather than by hand-editing
+      this flowgraph per point.'
     dev_addr: ''
     dev_args: ''
     gain0: rx_gain

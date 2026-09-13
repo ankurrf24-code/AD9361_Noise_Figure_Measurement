@@ -183,6 +183,10 @@ def main() -> None:
                           "If 0, results are NOT calibrated to absolute dBm -- Y-factor ratio is "
                           "still valid since the offset cancels in P_hot - P_cold, but log a real "
                           "value if you want absolute power sanity checks.")
+    ap.add_argument("--antenna", type=str, default="RX2", choices=["RX2", "TX/RX"],
+                     help="B210 channel-0 antenna to receive on (default: RX2, this "
+                          "project's 'RX1 port'). Use TX/RX if your noise source is "
+                          "instead wired to the shared TX/RX SMA.")
     ap.add_argument("--samp-rate", type=float, default=2e6)
     ap.add_argument("--capture-s", type=float, default=0.05,
                      help="Capture duration per hot/cold measurement, seconds")
@@ -207,7 +211,12 @@ def main() -> None:
         usrp = uhd.usrp.MultiUSRP()
         usrp.set_rx_rate(args.samp_rate)
         usrp.set_rx_freq(uhd.types.TuneRequest(args.freq))
-        usrp.set_rx_antenna("RX1")
+        # The B210's channel-0 antennas are named 'TX/RX' and 'RX2' -- there
+        # is no literal 'RX1' antenna string. This project's "RX1 port"
+        # label refers to the dedicated-receive 'RX2' antenna on channel 0
+        # (confirmed against the physical connection on the bench this was
+        # verified against; if your wiring differs, change this).
+        usrp.set_rx_antenna(args.antenna)
         usrp.set_rx_agc(False)
 
     if args.gain_table:
