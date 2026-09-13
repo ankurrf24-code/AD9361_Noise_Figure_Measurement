@@ -86,7 +86,9 @@ def main():
         daemon=True,
     )
     tx_thread.start()
-    time.sleep(0.5)  # let TX ramp up
+    # See docs/nr_waveform_method.md: 0.5s isn't enough for the threaded TX
+    # loop to clear its startup underrun transient. 2.5s clears it.
+    time.sleep(2.5)
 
     for rx_channel in [0, 1]:
         usrp.set_rx_rate(samp_rate, rx_channel)

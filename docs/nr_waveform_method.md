@@ -91,7 +91,74 @@ self-contained flowgraph). The flowgraph starts once; gain is changed live
 via `usrp_source.set_gain()` between capture windows, which is the
 GNU-Radio-idiomatic way to sweep gain without restarting the flowgraph.
 
-### Sample-count bug: fixed. Result-value gap: still open
+### The real second effect: a TX warm-up race, and a genuine USB throughput ceiling
+
+Two distinct bugs were found and chased down after the sample-count fix
+below didn't close the gap (in fact it moved differently per bandwidth,
+which was the clue that more than one thing was wrong):
+
+**1. TX warm-up race (root cause of most of the apparent "GNU Radio vs
+plain-UHD" discrepancy) -- fixed and verified.** Every script in this
+project that starts a threaded TX loop only waited `time.sleep(0.5)`
+before the gain sweep began measuring. Proof this was too short: 15
+repeated captures at a *fixed* gain (no sweep, same script) gave
+6.8-10.4 dB for the first ~6 captures, then a rock-steady 10.2-10.4 dB for
+every capture after that -- the TX loop takes ~1-1.5 s to clear its startup
+underrun transient and reach steady state. This also explains why
+re-running the *identical* reference script twice gave 8.73 dB and then
+10.24 dB at the same gain index: whether the sweep reached high gain
+indices before or after the TX stabilized was pure luck. **Fix**: increased
+the warm-up sleep to 2.5 s in all six affected scripts
+(`run_nr_tm_snr_sweep.py`, `run_nr_snr_sweep.py`, `run_snr_sweep_loopback.py`,
+`snr_iq_sweep.py`, `tx_tone_probe.py`, `gnuradio_nr_tm_gain_sweep.py`).
+**Verified**: after this fix, 5 MHz converges tightly between the two
+toolchains -- plain-UHD 10.29 dB, GNU Radio 10.37 dB (<0.1 dB apart) at
+Gain Index 76, both far more internally consistent run-to-run than before.
+
+**2. A genuine USB/host throughput ceiling at 30.72 Msps (20 MHz) -- a
+real hardware/system limitation, not a software bug fixable here.** After
+fix #1, 20 MHz *still* didn't converge (plain-UHD ~5.65 dB vs GNU Radio
+~2.7-3.3 dB across three repeated runs, reproducible, not noise). Checking
+raw stderr output revealed why: a single GNU Radio run at 20 MHz produced
+**1,905 overflow ("O") and 163,665 underflow ("U") markers** -- severe,
+sustained streaming failure throughout the entire run, not just at
+startup. This matches an already-documented finding in the external NR
+test-vector project itself: its `flowgraphs/tx_b210.py` has a developer
+comment stating that on this machine, controlled A/B testing showed
+"5 MHz streamed cleanly at default priority; 10 MHz+ underflowed heavily
+even at High priority" and that "sample rate/USB throughput is the
+dominant cause of underflows, not scheduling priority." That project only
+ever runs TX or RX alone in a given process; this project's flowgraph runs
+**both simultaneously** for the loopback test, roughly doubling the
+combined USB throughput demand -- which pushes 20 MHz well past a ceiling
+that's already documented as unfixable by software changes (vector source
+vs. file source, process priority) on this specific machine.
+
+**Practical consequence**: `run_nr_tm_snr_sweep.py`'s plain-UHD approach
+happens to survive this better (its overflow-retry logic, added alongside
+this investigation -- see below -- lets it complete a valid capture despite
+the same underlying throughput pressure), while the GNU Radio flowgraph's
+buffering/scheduling model suffers far more severely at 20 MHz on this
+hardware. **For 20 MHz, treat `run_nr_tm_snr_sweep.py` as the trustworthy
+result (~5.65 dB) and the GNU Radio flowgraph's 20 MHz number as unreliable
+on this machine** -- this is a hardware ceiling, not something more code
+changes here are expected to fix. 5 MHz is trustworthy and convergent on
+both toolchains.
+
+### RX overflow retry (plain-UHD capture_iq)
+
+While chasing the above, `run_nr_tm_snr_sweep.py` started throwing a hard
+`RuntimeError: UHD RX error: rx_metadata_error_code.overflow` and aborting
+the whole 20 MHz sweep the first time it hit one -- likely the same
+throughput pressure described above, occasionally manifesting as a
+host-side overflow rather than just underrun. `capture_iq()`
+(`run_nr_snr_sweep.py`) now catches `overflow` specifically, discards the
+partial capture, and re-issues a fresh `stream_cmd` for the full amount
+still needed (retrying up to 10 times before giving up), instead of
+crashing on the first hiccup. This is what let the 20 MHz plain-UHD sweep
+complete and produce the ~5.65 dB result cited above.
+
+### Sample-count bug: fixed (superseded by the above as the main explanation)
 
 First pass (`vector_sink.reset()` + fixed `sleep(capture_s)` + read
 `.data()`) had a real, verified bug: sample counts per gain point varied

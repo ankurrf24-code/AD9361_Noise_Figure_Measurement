@@ -112,6 +112,8 @@ def build_flowgraph(tx_iq, samp_rate, freq, tx_gain, rx_gain, channel):
     )
     usrp_source.set_samp_rate(samp_rate)
     usrp_source.set_center_freq(freq, 0)
+    usrp_source.set_rx_agc(False, 0)  # every other script in this project disables AGC
+    # explicitly before manual set_gain(); this flowgraph was missing it.
     usrp_source.set_gain(rx_gain, 0)
     usrp_source.set_antenna("RX2", 0)
 
@@ -165,7 +167,14 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     tb.start()
-    time.sleep(0.5)  # let TX ramp up before the first RX measurement
+    # 0.5s was not enough: the threaded TX loop underruns for its first
+    # ~1-1.5s (visible as "U" characters from UHD) while it finds a steady
+    # rhythm submitting buffers, and captures taken during that window read
+    # spuriously low/unstable SNR (verified: 15 repeated captures at a fixed
+    # gain showed 6.8-10.4 dB for the first ~6 captures, then a rock-steady
+    # ~10.2-10.4 dB afterward -- see docs/nr_waveform_method.md). 2.5s clears
+    # this with margin.
+    time.sleep(2.5)
 
     try:
         with open(out_path, "w", newline="") as f:

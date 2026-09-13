@@ -81,8 +81,29 @@ def capture_iq(usrp, num_samps, channel):
     md = uhd.types.RXMetadata()
     recv_buffer = np.zeros((1, rx_streamer.get_max_num_samps()), dtype=np.complex64)
     total = 0
+    overflow_retries = 0
     while total < num_samps:
         n = rx_streamer.recv(recv_buffer, md)
+        if md.error_code == uhd.types.RXMetadataErrorCode.overflow:
+            # Host-side overflow (samples dropped, e.g. from GIL contention
+            # with a concurrent TX thread at high sample rates) -- usually
+            # recoverable mid-stream. Discard what we have so far (its
+            # continuity across the drop is not guaranteed) and re-issue a
+            # fresh stream_cmd for the full amount still needed, rather than
+            # aborting the whole capture on the first hiccup.
+            overflow_retries += 1
+            if overflow_retries > 10:
+                raise RuntimeError(
+                    f"UHD RX overflow {overflow_retries} times in one capture -- "
+                    "not recovering; check for a genuine throughput problem "
+                    "(sample rate too high for this USB link/host)."
+                )
+            total = 0
+            stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.num_done)
+            stream_cmd.num_samps = num_samps
+            stream_cmd.stream_now = True
+            rx_streamer.issue_stream_cmd(stream_cmd)
+            continue
         if md.error_code != uhd.types.RXMetadataErrorCode.none:
             raise RuntimeError(f"UHD RX error: {md.error_code}")
         chunk = min(n, num_samps - total)
@@ -163,7 +184,10 @@ def main() -> None:
         daemon=True,
     )
     tx_thread.start()
-    time.sleep(0.5)
+    # See docs/nr_waveform_method.md: 0.5s isn't enough for the threaded TX
+    # loop to clear its startup underrun transient (~1-1.5s), which caused
+    # spuriously low/unstable SNR on early captures. 2.5s clears it.
+    time.sleep(2.5)
 
     usrp.set_rx_rate(waveform.samp_rate, args.channel)
     usrp.set_rx_freq(uhd.types.TuneRequest(args.freq), args.channel)

@@ -99,7 +99,10 @@ def main() -> None:
         daemon=True,
     )
     tx_thread.start()
-    time.sleep(0.5)
+    # See docs/nr_waveform_method.md: 0.5s isn't enough for the threaded TX
+    # loop to clear its startup underrun transient (~1-1.5s), which caused
+    # spuriously low/unstable SNR on early captures. 2.5s clears it.
+    time.sleep(2.5)
 
     usrp.set_rx_rate(args.samp_rate, args.rx_channel)
     usrp.set_rx_freq(uhd.types.TuneRequest(args.freq), args.rx_channel)

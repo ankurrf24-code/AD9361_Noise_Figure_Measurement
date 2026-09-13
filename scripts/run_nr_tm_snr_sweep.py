@@ -134,7 +134,13 @@ def main() -> None:
         daemon=True,
     )
     tx_thread.start()
-    time.sleep(0.5)
+    # 0.5s was not enough: the threaded TX loop underruns for its first
+    # ~1-1.5s while finding a steady rhythm submitting buffers, and captures
+    # taken during that window read spuriously low/unstable SNR (verified:
+    # 15 repeated captures at fixed gain showed 6.8-10.4 dB for the first
+    # ~6 captures, then a rock-steady ~10.2-10.4 dB afterward -- see
+    # docs/nr_waveform_method.md). 2.5s clears this with margin.
+    time.sleep(2.5)
 
     usrp.set_rx_rate(samp_rate, args.channel)
     usrp.set_rx_freq(uhd.types.TuneRequest(args.freq), args.channel)
