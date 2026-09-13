@@ -69,6 +69,19 @@ on the input.
 
 Full step-by-step instructions: [docs/measurement_manual.md](docs/measurement_manual.md).
 
+## SNR-from-live-IQ Analysis (no ENR needed)
+
+Since a calibrated noise source with a known ENR isn't available yet,
+`scripts/run_snr_sweep.py` provides a complementary, self-contained
+analysis: it sweeps Gain Index, captures live IQ, and computes
+`SNR = strongest FFT bin - median noise floor` at each point, using
+whatever is actually present at the antenna — no ENR or hot/cold cycling
+required. This is not a calibrated NF measurement, but it's a real,
+gain-dependent characterization from live hardware. See
+[docs/reference_ad9361_nf_curve.md](docs/reference_ad9361_nf_curve.md) for
+how this cross-validates against ADI's own (confidential, cited-not-included)
+published NF vs. Gain Index behavior.
+
 ## CSV Log Schema
 
 ```
