@@ -69,3 +69,11 @@ AD9361's own noise floor even at maximum gain (or the environment simply
 has no signal there right now). It does not indicate a problem with the
 sweep methodology, which behaved identically (and correctly) to the 920 MHz
 run in every other respect (gain control, capture, FFT processing).
+
+Re-checked with 5x more spectral coverage (10 MHz sample rate instead of
+2 MHz, `results/plots/signal_power_2190MHz_10MHz.png`) in case a real signal
+simply sat outside the original narrow window -- still no locked signal
+across all 77 gain indices. A modest clustering of peak offsets appeared
+near ~51 kHz (just past the 48.8 kHz DC guard band), but it doesn't dominate
+consistently across gain indices the way the real 920 MHz signal did, so
+it reads as residual LO-leakage skirt rather than an external signal.

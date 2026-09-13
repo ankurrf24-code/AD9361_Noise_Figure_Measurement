@@ -134,8 +134,11 @@ def main() -> None:
     ap.add_argument("--fft-size", type=int, default=4096)
     ap.add_argument("--num-avg", type=int, default=50,
                      help="Number of FFT frames averaged per gain point")
-    ap.add_argument("--dc-guard-bins", type=int, default=5,
-                     help="Bins excluded around DC (AD9361 direct-conversion LO leakage)")
+    ap.add_argument("--dc-guard-hz", type=float, default=50e3,
+                     help="Absolute bandwidth excluded around DC for AD9361 LO leakage "
+                          "(fixed Hz width, converted to bins per sample rate/FFT size -- "
+                          "LO leakage is a roughly fixed absolute frequency offset, not a "
+                          "fixed number of bins, so this must scale with --samp-rate)")
     ap.add_argument("--settle-s", type=float, default=0.1)
     ap.add_argument("--out", type=str, required=True)
     ap.add_argument("--dry-run", action="store_true")
@@ -156,6 +159,10 @@ def main() -> None:
         gain_table = build_auto_gain_list(usrp, args.dry_run, args.gain_step_db)
 
     num_samps = args.fft_size * args.num_avg
+    bin_width_hz = args.samp_rate / args.fft_size
+    dc_guard_bins = max(1, round(args.dc_guard_hz / bin_width_hz))
+    print(f"Bin width: {bin_width_hz:.1f} Hz, DC guard: {dc_guard_bins} bins "
+          f"(~{dc_guard_bins * bin_width_hz / 1e3:.1f} kHz each side)")
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,7 +183,7 @@ def main() -> None:
                 samples = capture_iq(usrp, num_samps)
 
             signal_db, noise_db, peak_offset_hz = spectrum_snr(
-                samples, args.samp_rate, args.fft_size, args.num_avg, args.dc_guard_bins
+                samples, args.samp_rate, args.fft_size, args.num_avg, dc_guard_bins
             )
             snr_db = signal_db - noise_db
 
