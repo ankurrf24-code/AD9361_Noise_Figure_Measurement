@@ -42,10 +42,14 @@ on the input.
 
 ## Procedure Summary
 
-1. Select the gain-table band for the target frequency (200-1300 MHz for
-   920 MHz, 1300-4000 MHz for 2190 MHz) — see [docs/gain_tables](docs/gain_tables/).
-2. Sweep Gain Index 0-76. For each index, look up Total Gain (dB) from the
-   datasheet-derived table and command that value via UHD (`set_rx_gain`).
+1. Sweep RX gain. Recommended: `run_nf_sweep.py --auto-gain` reads the
+   B210's own `get_rx_gain_range()`/`get_rx_gain()` rather than trusting a
+   transcribed datasheet table (see [docs/gain_tables](docs/gain_tables/) for
+   why — the AD9361 full gain table is only nominally 1 dB/step and some
+   parts flatten above ~58 dB per ADI's own forum reports). A verified
+   static `--gain-table` CSV is supported as an alternative.
+2. For each gain point, command it via UHD (`set_rx_gain`) and read back the
+   actual applied value.
 3. Measure `P_cold` (noise source OFF) and `P_hot` (noise source ON).
 4. Compute `Y = P_hot_lin / P_cold_lin` and `NF = ENR - 10*log10(Y - 1)`.
 5. Apply corrections for attenuator/cable loss, measurement bandwidth /
@@ -97,11 +101,14 @@ AD9361_Noise_Figure_Measurement/
 
 - **AD9361 gain tables are not fabricated here.** `docs/gain_tables/*.csv`
   are templates with the Gain Index column populated and the Total Gain (dB)
-  column left blank. Fill them from the AD9361 Reference Manual (UG-570) gain
-  table appendix or the authoritative driver source — see
-  [docs/gain_tables/README.md](docs/gain_tables/README.md) for exactly where
-  to get them. Do not guess these values; they are chip- and band-specific
-  and the whole NF calculation depends on them being correct.
+  column left blank, for anyone who wants canonical AD9361 gain-index
+  labeling. The recommended path instead is `run_nf_sweep.py --auto-gain`,
+  which sweeps the B210's own reported gain range rather than needing this
+  table at all — see [docs/gain_tables/README.md](docs/gain_tables/README.md)
+  for why (ADI's own datasheet says the full table is only *nominally*
+  1 dB/step, and EngineerZone reports describe it flattening above ~58 dB on
+  some parts, so a copied table isn't safe to trust without independent
+  verification against your specific part).
 - The GNU Radio flowgraph has not been opened/validated in GRC (no GNU Radio
   install / B210 hardware available in this environment) — validate the
   block wiring and sample rate/decimation choices on your bench before

@@ -8,9 +8,28 @@ This script has NOT been run against real hardware in this environment (no
 B210 / UHD install available here) -- validate on your bench before trusting
 logged data. Review docs/measurement_manual.md before running.
 
+Gain source: two modes are supported.
+
+  --auto-gain (recommended): queries the connected B210's actual
+      get_rx_gain_range() and sweeps it at the device's own reported step,
+      logging the real applied gain from get_rx_gain() at every point. This
+      avoids depending on a hand-transcribed AD9361 datasheet gain table --
+      per ADI's own documentation (AD9361 Reference Manual UG-570 / Rev. F
+      datasheet: "Gain Step 1 dB", "Gain Index = 76 (Maximum Setting)") the
+      standard full gain table is only *nominally* 1 dB/step, and multiple
+      users on ADI's EngineerZone forum report the reported gain flattening
+      out above ~58 dB rather than continuing linearly to index 76 -- so the
+      index-to-dB mapping is not safe to assume from the datasheet alone.
+      Reading it back from the actual part in hand is both simpler and more
+      correct for a measurement campaign.
+
+  --gain-table <csv>: use a static Gain_Index -> Total_Gain_dB table (see
+      docs/gain_tables/) if you have independently verified one (e.g. against
+      UG-570's gain table appendix or a no-OS/Linux driver source) and want
+      canonical AD9361 gain-index labeling rather than device-reported values.
+
 Usage:
-    python run_nf_sweep.py --freq 920e6 \
-        --gain-table docs/gain_tables/gain_table_200_1300MHz.csv \
+    python run_nf_sweep.py --freq 920e6 --auto-gain \
         --enr-source-db 15.2 --atten-db 30.15 --cable-db 1.05 \
         --out data/raw/nf_920MHz_2026-09-12.csv
 """
@@ -56,6 +75,34 @@ def load_gain_table(path: str) -> list[tuple[int, float]]:
             rows.append((idx, float(raw)))
     rows.sort(key=lambda t: t[0])
     return rows
+
+
+def build_auto_gain_list(usrp, dry_run: bool, step_override: float | None) -> list[tuple[int, float]]:
+    """
+    Build the sweep list from the device's own reported gain range instead of
+    a static datasheet table. See module docstring for why.
+    """
+    if dry_run or usrp is None:
+        # No hardware to query in --dry-run: fall back to the AD9361
+        # datasheet's *nominal* spec (0-76 dB, 1 dB/step, 77 points) purely to
+        # exercise the CSV/plumbing. This is NOT a verified per-index table --
+        # see module docstring. Real runs must not use this branch.
+        return [(i, float(i)) for i in range(77)]
+
+    gain_range = usrp.get_rx_gain_range()
+    start, stop = gain_range.start(), gain_range.stop()
+    step = step_override if step_override else gain_range.step()
+    if not step or step <= 0:
+        step = 1.0
+
+    values = []
+    idx = 0
+    g = start
+    while g <= stop + 1e-9:
+        values.append((idx, round(g, 3)))
+        idx += 1
+        g += step
+    return values
 
 
 def measure_power_dbm(samples: np.ndarray, dbm_offset: float) -> float:
@@ -113,7 +160,14 @@ def prompt_noise_source(state: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--freq", type=float, required=True, help="Center frequency in Hz")
-    ap.add_argument("--gain-table", type=str, required=True)
+    gain_group = ap.add_mutually_exclusive_group(required=True)
+    gain_group.add_argument("--auto-gain", action="store_true",
+                             help="Sweep the device's own reported gain range/step "
+                                  "instead of a static table. Recommended -- see module docstring.")
+    gain_group.add_argument("--gain-table", type=str,
+                             help="Static Gain_Index -> Total_Gain_dB CSV (see docs/gain_tables/)")
+    ap.add_argument("--gain-step-db", type=float, default=None,
+                     help="Override the step size used with --auto-gain (default: device-reported step)")
     ap.add_argument("--enr-source-db", type=float, required=True,
                      help="Noise source ENR at this frequency, from its cal cert")
     ap.add_argument("--atten-db", type=float, required=True,
@@ -138,7 +192,6 @@ def main() -> None:
                      help="Skip UHD hardware calls; useful to sanity-check the gain table and CSV output")
     args = ap.parse_args()
 
-    gain_table = load_gain_table(args.gain_table)
     path_loss = PathLoss(attenuator_db=args.atten_db, cable_db=args.cable_db)
     enr_db = enr_at_rx1(args.enr_source_db, path_loss)
     print(f"ENR referred to RX1: {enr_db:.3f} dB "
@@ -152,6 +205,15 @@ def main() -> None:
         usrp.set_rx_freq(uhd.types.TuneRequest(args.freq))
         usrp.set_rx_antenna("RX1")
         usrp.set_rx_agc(False)
+
+    if args.gain_table:
+        gain_table = load_gain_table(args.gain_table)
+    else:
+        if args.dry_run:
+            print("NOTE: --auto-gain with --dry-run uses a nominal 0-76 dB / "
+                  "1 dB-step placeholder, not a device-verified table. Run "
+                  "without --dry-run on real hardware for actual gain values.")
+        gain_table = build_auto_gain_list(usrp, args.dry_run, args.gain_step_db)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)

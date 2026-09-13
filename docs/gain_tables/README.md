@@ -6,6 +6,26 @@ settings. This mapping is **band-specific** — there is one table for RF
 input 200-1300 MHz and a different one for 1300-4000 MHz — and it is defined
 by Analog Devices, not something to estimate or interpolate.
 
+## Recommended: skip the static table, use `--auto-gain`
+
+Per ADI's own documentation, the standard full gain table is only
+*nominally* 1 dB/step (AD9361 Rev. F datasheet: "Gain Step 1 dB", "Gain Index
+= 76 (Maximum Setting)"), and multiple users on ADI's EngineerZone forum
+report the actual reported gain flattening out above roughly 58 dB rather
+than continuing linearly to index 76 (e.g. the "AD9361 custom gain table"
+and "AD9361 no-OS for custom gain table" EngineerZone threads). UHD's own
+`ad9361_gain_tables.h` stores raw register/LNA/mixer/TIA control words per
+index, not dB values, so it can't be read as a dB lookup either.
+
+Given that, **`scripts/run_nf_sweep.py --auto-gain` is the recommended path**:
+it queries the connected B210's actual `get_rx_gain_range()` and sweeps at
+the device's own reported step, logging the real `get_rx_gain()` readback at
+every point. That's ground truth from the specific part on your bench,
+rather than a value trusted from a datasheet/forum transcription. The CSVs
+below are kept as an optional path for anyone who has independently
+verified a canonical table and wants AD9361 gain-index labeling instead of
+device-reported values.
+
 ## Why the CSVs here are templates, not filled-in data
 
 The exact per-index dB values are chip-specific calibration/design data.

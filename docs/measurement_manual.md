@@ -49,14 +49,24 @@ any NF data:
 5. Record ambient temperature (T0 reference for ENR is normally 290 K —
    confirm what your noise source's ENR is referenced to).
 
-## 5. Gain Table Setup
+## 5. Gain Sweep Setup
 
-1. For 920 MHz, use `docs/gain_tables/gain_table_200_1300MHz.csv`.
-2. For 2190 MHz, use `docs/gain_tables/gain_table_1300_4000MHz.csv`.
-3. Confirm these CSVs have been populated with real Total Gain (dB) values
-   per Gain Index (0-76) from the AD9361 reference manual / driver source —
-   see [docs/gain_tables/README.md](gain_tables/README.md). **Do not proceed
-   with an unpopulated table.**
+Recommended: run `scripts/run_nf_sweep.py --auto-gain`, which queries the
+connected B210's actual `get_rx_gain_range()` and sweeps its real reported
+gain steps, logging `get_rx_gain()` readback at each point. This avoids
+depending on a hand-transcribed AD9361 datasheet gain table — see
+[docs/gain_tables/README.md](gain_tables/README.md) for why the index-to-dB
+mapping isn't safe to assume from the datasheet alone (ADI's own
+documentation and EngineerZone reports indicate it's only nominally
+1 dB/step and flattens above ~58 dB on some parts).
+
+If you have an independently verified static table instead, use
+`--gain-table` with:
+1. `docs/gain_tables/gain_table_200_1300MHz.csv` for 920 MHz.
+2. `docs/gain_tables/gain_table_1300_4000MHz.csv` for 2190 MHz.
+
+The sweep script will refuse to run against a `--gain-table` CSV with blank
+`Total_Gain_dB` entries.
 
 ## 6. Procedure
 
@@ -66,12 +76,14 @@ For each target frequency (920 MHz, then 2190 MHz):
 2. Set RX antenna to RX1 (`set_rx_antenna("RX1")` — the B210 also requires
    selecting the correct daughterboard subdev, typically `A:A`).
 3. Disable AGC (`set_rx_agc(False)`) — gain must be manual and repeatable.
-4. For Gain Index `i` = 0 to 76:
-   a. Look up `Total_Gain_dB[i]` from the appropriate gain table CSV.
-   b. Command `set_rx_gain(Total_Gain_dB[i])` via UHD. Read back
-      `get_rx_gain()` and record as `RX_Gain_UHD_dB` (UHD may snap to the
-      nearest supported step — log what was actually applied, not just what
-      was requested).
+4. For each gain point `i` in the sweep (0 to 76, or however many device
+   reports with `--auto-gain`):
+   a. Determine the requested gain: from `get_rx_gain_range()` step-through
+      (`--auto-gain`, recommended) or looked up as `Total_Gain_dB[i]` from
+      the gain table CSV (`--gain-table`).
+   b. Command `set_rx_gain(...)` via UHD. Read back `get_rx_gain()` and
+      record as `RX_Gain_UHD_dB` (UHD may snap to the nearest supported
+      step — log what was actually applied, not just what was requested).
    c. **Cold measurement**: ensure noise source is OFF. Wait for the RX chain
       to settle (LO lock, gain settle — typically >= 50 ms). Capture N seconds
       of IQ samples. Compute average power in dBm over the calibrated
