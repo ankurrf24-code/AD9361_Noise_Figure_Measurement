@@ -45,7 +45,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent))
-from nf_yfactor import PathLoss, enr_at_rx1, noise_figure_db  # noqa: E402
+from nf_yfactor import PathLoss, db_to_linear, enr_at_rx1, linear_to_db, noise_figure_db  # noqa: E402
 
 CSV_FIELDS = [
     "Gain_Index",
@@ -234,8 +234,14 @@ def main() -> None:
                   f"applied={applied_gain:.2f} dB")
 
             if args.dry_run:
+                # Physically-consistent placeholder (not real data): derive
+                # P_hot/P_cold from the actual enr_db for an assumed 5 dB
+                # receiver, so the CSV demonstrates a plausible NF instead of
+                # an arbitrary (possibly impossible, e.g. negative) value.
+                assumed_nf_db = 5.0
+                y_placeholder = 1.0 + db_to_linear(enr_db) / db_to_linear(assumed_nf_db)
                 p_cold = -80.0
-                p_hot = -77.0
+                p_hot = p_cold + linear_to_db(y_placeholder)
             else:
                 prompt_noise_source("OFF")
                 time.sleep(args.settle_s)
