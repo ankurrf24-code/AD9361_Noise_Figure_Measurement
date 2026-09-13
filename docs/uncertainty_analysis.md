@@ -10,7 +10,7 @@ Frequency) point.
 | Source | Typical magnitude | Notes |
 |---|---|---|
 | ENR calibration uncertainty (`u_ENR`) | 0.1-0.3 dB (see noise source cal cert) | Dominant term at low Y-factor / low NF |
-| Attenuator loss uncertainty (`u_atten`) | 0.05-0.2 dB | From VNA cal or attenuator datasheet |
+| Attenuator loss uncertainty (`u_atten`) | 0 if no pad is in the noise-source path (see `docs/calibration_procedure.md` Section 0); 0.05-0.2 dB if your bench genuinely uses one | From VNA cal or attenuator datasheet |
 | Cable loss uncertainty (`u_cable`) | 0.05-0.15 dB | From VNA cal |
 | USRP RX gain repeatability (`u_gain`) | 0.1-0.5 dB | Run repeated gain-set/read-back cycles to characterize; AD9361 gain steps are not perfectly monotonic/repeatable across retunes |
 | Temperature drift (`u_temp`) | varies | ENR reference is 290 K; ambient deviation and DUT self-heating both contribute — track ambient T during the run |

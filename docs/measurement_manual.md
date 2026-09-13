@@ -12,11 +12,13 @@ and 2190 MHz, using the Y-factor method with a calibrated noise source.
 - Calibrated noise source with known ENR(f) — datasheet or cal-lab ENR table
   covering 920 MHz and 2190 MHz
 - Noise source power supply / bias-tee or GPIO control line to switch it ON/OFF
-- 30 dB calibrated precision attenuator
 - RF cable(s), ~1 dB loss (get the actual measured value — see calibration doc)
-- VNA or power meter for attenuator/cable loss verification (calibration step)
+- 30 dB calibrated precision attenuator (used only for the separate TX1
+  loopback/leakage check in Section 3 — do NOT insert it in the noise-source
+  path; see [calibration_procedure.md](calibration_procedure.md) Section 0)
+- VNA or power meter for cable loss verification (calibration step)
 - Host PC with UHD + GNU Radio (or UHD Python API) installed
-- Temperature logging (ambient, and ideally attenuator/board temperature)
+- Temperature logging (ambient, and ideally board temperature)
 
 ## 3. Signal Path
 
@@ -24,15 +26,22 @@ and 2190 MHz, using the Y-factor method with a calibrated noise source.
 Noise Source --[bias/control]--
       |
       v (RF out)
-30 dB calibrated attenuator
-      |
 RF cable (~1 dB, measured)
       |
       v
 USRP B210 RX1
 ```
 
-TX1 is left disconnected/terminated with a 50 ohm load during this
+The 30 dB attenuator is **not** part of this path. It exists solely to
+protect RX1 from TX1's own output power for a separate loopback/leakage
+check (`TX1 -> 30 dB attenuator -> cable -> RX1`), which is a different test
+from this Y-factor NF measurement and is not itself a valid NF measurement
+method (see README "Measurement Method"). Inserting 30 dB of loss between
+the noise source and RX1 would crush the ENR available at RX1 well below
+what's measurable — see `docs/calibration_procedure.md` Section 0 for the
+worked numbers.
+
+TX1 is left disconnected/terminated with a 50 ohm load during the NF
 measurement — it plays no role in the Y-factor method and must not radiate
 into the RX path.
 
@@ -41,7 +50,9 @@ into the RX path.
 Complete [calibration_procedure.md](calibration_procedure.md) before taking
 any NF data:
 
-1. Measure actual attenuator loss at 920 MHz and 2190 MHz (not just nameplate 30 dB).
+1. Confirm no attenuator is inserted in the noise-source path (Section 0 of
+   the calibration doc) — if your bench genuinely needs one, measure its
+   actual loss at 920 MHz and 2190 MHz (never trust a nameplate value).
 2. Measure actual cable loss at both frequencies.
 3. Confirm/record noise source ENR at both frequencies from its cal certificate.
 4. Record measurement bandwidth and FFT resolution bandwidth (RBW) used for

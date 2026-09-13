@@ -4,13 +4,35 @@ Everything in the Y-factor NF result depends on the numbers gathered here.
 Do this before every measurement campaign (and re-check if cables/attenuator
 are swapped or reconnected).
 
-## 1. Attenuator Loss
+## 0. Do not put the 30 dB TX1-loopback pad in the noise-source path
 
-The 30 dB pad is a nameplate value, not a calibration value.
+This project's bench has a 30 dB attenuator that exists **only** to protect
+RX1 from TX1's own output power during a separate TX1 loopback/leakage
+check. It is not needed for the Y-factor measurement — a calibrated noise
+source outputs very low power and requires no protection pad — and inserting
+it anyway would crush the ENR available at RX1 far below what's measurable.
+Worked example: a 15.2 dB ENR source through 30 dB of pad + ~1 dB of cable
+leaves only ~-16 dB of ENR at RX1, which for a 5 dB-NF receiver works out to
+a P_hot-P_cold delta of ~0.03 dB — almost certainly below your system's
+noise floor/repeatability (`scripts/nf_yfactor.py`'s `__main__` reproduces
+this and prints a warning). Removing the pad from this leg (source -> cable
+-> RX1 only) raises that same case to ~9.6 dB of separation, which is
+comfortably measurable.
+
+If your own bench genuinely needs some pad in the noise-source path (e.g.
+for a return-loss/VSWR reason, or RX1 protection because your specific
+source's output power warrants it), keep it as small as the requirement
+allows and measure it per Section 1 below — a few dB is normal; do not
+default to reusing the same value as an unrelated TX-protection pad.
+
+## 1. Attenuator Loss (only if your setup uses one in the noise-source path)
+
+A nameplate value is not a calibration value.
 
 1. Using a VNA (or signal generator + power meter substitution method),
    measure S21 (insertion loss) of the attenuator at 920 MHz and 2190 MHz.
-2. Record actual loss, e.g. `L_atten_920 = 30.15 dB`, `L_atten_2190 = 30.4 dB`.
+2. Record actual loss, e.g. `L_atten_920 = 0.0 dB` (no pad, per Section 0),
+   or the measured value if your bench does use one.
 3. Note the attenuator's stated uncertainty from its cal certificate (feeds
    the uncertainty budget in `uncertainty_analysis.md`).
 
@@ -26,8 +48,9 @@ The 30 dB pad is a nameplate value, not a calibration value.
 L_path(f) = L_atten(f) + L_cable(f)
 ```
 
-Compute this per frequency. This is the value used to refer the noise
-source's ENR to the RX1 reference plane (see Section 6).
+Compute this per frequency (`L_atten(f) = 0` unless your bench genuinely has
+a pad in this leg — see Section 0). This is the value used to refer the
+noise source's ENR to the RX1 reference plane (see Section 6).
 
 ## 4. Noise Source ENR
 
@@ -90,7 +113,8 @@ attenuator, cable"). See `scripts/nf_yfactor.py` for the implementation.
 
 Log all of the following alongside every measurement session:
 
-- Attenuator loss (920 MHz, 2190 MHz) + uncertainty
+- Attenuator loss in the noise-source path (920 MHz, 2190 MHz) + uncertainty
+  — expect 0 dB per Section 0 unless your bench genuinely needs a pad there
 - Cable loss (920 MHz, 2190 MHz) + uncertainty
 - Noise source ENR (920 MHz, 2190 MHz) + uncertainty, and cal cert ID/date
 - Ambient temperature

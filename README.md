@@ -19,14 +19,23 @@ points.
 |---|---|
 | SDR | Ettus USRP B210 (AD9361 transceiver) |
 | RX port | RX1 |
-| TX port | TX1 (disconnected/terminated during NF measurement — TX1 is only used for the loopback path when the noise source is not connected there) |
+| TX port | TX1 (disconnected/terminated during NF measurement) |
 | Frequencies | 920 MHz, 2190 MHz (initial) |
-| Signal path | Noise source -> 30 dB calibrated attenuator -> RF cable (~1 dB loss) -> RX1 |
-| Total known path attenuation | ~31 dB (must be measured precisely per [calibration procedure](docs/calibration_procedure.md), not assumed) |
+| Signal path (Y-factor NF measurement) | Calibrated noise source -> RF cable (~1 dB loss) -> RX1 |
+| Signal path (TX1 loopback/leakage check — separate, not used for NF) | TX1 -> 30 dB calibrated attenuator -> RF cable -> RX1 |
 
-Attenuator and cable losses are measured values fed into the NF calculation
-and the [uncertainty budget](docs/uncertainty_analysis.md) — they are never
-assumed nominal.
+**The 30 dB attenuator is only needed to protect RX1 from TX1's own output
+power during a TX1 loopback/leakage check — it is a different signal path
+for a different purpose, and must NOT be inserted between the calibrated
+noise source and RX1.** A calibrated noise source outputs very low power
+(no protection pad required), and 30 dB of loss there would crush the
+ENR available at RX1 to the point of being unmeasurable — see the worked
+example in [scripts/nf_yfactor.py](scripts/nf_yfactor.py)'s `__main__` and
+the note in [docs/calibration_procedure.md](docs/calibration_procedure.md).
+
+Cable loss in the noise-source path is still a measured value fed into the
+NF calculation and the [uncertainty budget](docs/uncertainty_analysis.md) —
+never assumed nominal.
 
 ## Measurement Method
 
@@ -52,8 +61,10 @@ on the input.
    actual applied value.
 3. Measure `P_cold` (noise source OFF) and `P_hot` (noise source ON).
 4. Compute `Y = P_hot_lin / P_cold_lin` and `NF = ENR - 10*log10(Y - 1)`.
-5. Apply corrections for attenuator/cable loss, measurement bandwidth /
-   FFT RBW, and ENR frequency-interpolated value.
+5. Apply corrections for cable loss (and attenuator loss too, if your
+   specific bench setup does place a pad in the noise-source path —
+   see the Hardware Setup note above on why this project's setup doesn't),
+   measurement bandwidth / FFT RBW, and ENR frequency-interpolated value.
 6. Log every point to CSV (see schema below) and plot NF vs Gain Index.
 
 Full step-by-step instructions: [docs/measurement_manual.md](docs/measurement_manual.md).

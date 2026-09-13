@@ -96,7 +96,10 @@ if __name__ == "__main__":
     # confirm noise_figure_db() recovers the same NF. This is self-consistent
     # (unlike picking an arbitrary P_hot-P_cold delta, which can produce a
     # physically impossible negative NF if it doesn't match the assumed ENR).
-    path = PathLoss(attenuator_db=30.15, cable_db=1.05)
+    # No attenuator in the noise-source path -- the 30 dB pad on this bench
+    # protects RX1 during a separate TX1 loopback check only. See
+    # docs/calibration_procedure.md Section 0.
+    path = PathLoss(attenuator_db=0.0, cable_db=1.05)
     enr_source_db = 15.2
     enr_effective = enr_at_rx1(enr_source_db, path)
     print(f"ENR at RX1: {enr_effective:.3f} dB "

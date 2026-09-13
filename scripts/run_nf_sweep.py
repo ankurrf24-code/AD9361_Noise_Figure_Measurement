@@ -170,8 +170,12 @@ def main() -> None:
                      help="Override the step size used with --auto-gain (default: device-reported step)")
     ap.add_argument("--enr-source-db", type=float, required=True,
                      help="Noise source ENR at this frequency, from its cal cert")
-    ap.add_argument("--atten-db", type=float, required=True,
-                     help="Measured attenuator loss at this frequency")
+    ap.add_argument("--atten-db", type=float, default=0.0,
+                     help="Measured attenuator loss in the noise-source path at this frequency. "
+                          "Default 0 -- do NOT reuse a TX1-loopback protection pad value here; "
+                          "see docs/calibration_procedure.md Section 0 for why that would crush "
+                          "the ENR available at RX1. Only set this if your bench genuinely has a "
+                          "pad between the noise source and RX1.")
     ap.add_argument("--cable-db", type=float, required=True,
                      help="Measured cable loss at this frequency")
     ap.add_argument("--dbm-offset", type=float, default=0.0,
