@@ -47,11 +47,11 @@ CSV_FIELDS = [
 ]
 
 
-def capture_iq(usrp, num_samps: int) -> np.ndarray:
+def capture_iq(usrp, num_samps: int, channel: int = 0) -> np.ndarray:
     import uhd
 
     st_args = uhd.usrp.StreamArgs("fc32", "sc16")
-    st_args.channels = [0]
+    st_args.channels = [channel]
     rx_streamer = usrp.get_rx_stream(st_args)
 
     buf = np.zeros(num_samps, dtype=np.complex64)
@@ -130,6 +130,10 @@ def main() -> None:
                              help="Static Gain_Index -> Total_Gain_dB CSV")
     ap.add_argument("--gain-step-db", type=float, default=None)
     ap.add_argument("--antenna", type=str, default="RX2", choices=["RX2", "TX/RX"])
+    ap.add_argument("--channel", type=int, default=1, choices=[0, 1],
+                     help="UHD RX channel index. Default 1 -- confirmed via tx_tone_probe.py "
+                          "that this project's physical TX1/RX1 ports are channel 1 "
+                          "(subdev FE-TX1/FE-RX1), not channel 0 (FE-TX2/FE-RX2).")
     ap.add_argument("--samp-rate", type=float, default=2e6)
     ap.add_argument("--fft-size", type=int, default=4096)
     ap.add_argument("--num-avg", type=int, default=50,
@@ -148,15 +152,15 @@ def main() -> None:
     if not args.dry_run:
         import uhd
         usrp = uhd.usrp.MultiUSRP()
-        usrp.set_rx_rate(args.samp_rate)
-        usrp.set_rx_freq(uhd.types.TuneRequest(args.freq))
-        usrp.set_rx_antenna(args.antenna)
-        usrp.set_rx_agc(False)
+        usrp.set_rx_rate(args.samp_rate, args.channel)
+        usrp.set_rx_freq(uhd.types.TuneRequest(args.freq), args.channel)
+        usrp.set_rx_antenna(args.antenna, args.channel)
+        usrp.set_rx_agc(False, args.channel)
 
     if args.gain_table:
         gain_table = load_gain_table(args.gain_table)
     else:
-        gain_table = build_auto_gain_list(usrp, args.dry_run, args.gain_step_db)
+        gain_table = build_auto_gain_list(usrp, args.dry_run, args.gain_step_db, args.channel)
 
     num_samps = args.fft_size * args.num_avg
     bin_width_hz = args.samp_rate / args.fft_size
@@ -177,10 +181,10 @@ def main() -> None:
                 rng = np.random.default_rng(gain_index)
                 samples = (rng.standard_normal(num_samps) + 1j * rng.standard_normal(num_samps)).astype(np.complex64)
             else:
-                usrp.set_rx_gain(requested_gain_db)
+                usrp.set_rx_gain(requested_gain_db, args.channel)
                 time.sleep(args.settle_s)
-                applied_gain = usrp.get_rx_gain()
-                samples = capture_iq(usrp, num_samps)
+                applied_gain = usrp.get_rx_gain(args.channel)
+                samples = capture_iq(usrp, num_samps, args.channel)
 
             signal_db, noise_db, peak_offset_hz = spectrum_snr(
                 samples, args.samp_rate, args.fft_size, args.num_avg, dc_guard_bins

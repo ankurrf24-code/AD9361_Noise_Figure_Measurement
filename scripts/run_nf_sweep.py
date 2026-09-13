@@ -77,7 +77,9 @@ def load_gain_table(path: str) -> list[tuple[int, float]]:
     return rows
 
 
-def build_auto_gain_list(usrp, dry_run: bool, step_override: float | None) -> list[tuple[int, float]]:
+def build_auto_gain_list(
+    usrp, dry_run: bool, step_override: float | None, channel: int = 0
+) -> list[tuple[int, float]]:
     """
     Build the sweep list from the device's own reported gain range instead of
     a static datasheet table. See module docstring for why.
@@ -89,7 +91,7 @@ def build_auto_gain_list(usrp, dry_run: bool, step_override: float | None) -> li
         # see module docstring. Real runs must not use this branch.
         return [(i, float(i)) for i in range(77)]
 
-    gain_range = usrp.get_rx_gain_range()
+    gain_range = usrp.get_rx_gain_range(channel)
     start, stop = gain_range.start(), gain_range.stop()
     step = step_override if step_override else gain_range.step()
     if not step or step <= 0:
@@ -118,15 +120,15 @@ def measure_power_dbm(samples: np.ndarray, dbm_offset: float) -> float:
     return raw_db + dbm_offset
 
 
-def capture_power(usrp, duration_s: float, dbm_offset: float) -> float:
+def capture_power(usrp, duration_s: float, dbm_offset: float, channel: int = 0) -> float:
     """Capture `duration_s` seconds of IQ and return average power in dBm."""
     import uhd  # local import: only required when actually running on hardware
 
     st_args = uhd.usrp.StreamArgs("fc32", "sc16")
-    st_args.channels = [0]
+    st_args.channels = [channel]
     rx_streamer = usrp.get_rx_stream(st_args)
 
-    num_samps = int(duration_s * usrp.get_rx_rate())
+    num_samps = int(duration_s * usrp.get_rx_rate(channel))
     buf = np.zeros(num_samps, dtype=np.complex64)
 
     stream_cmd = uhd.types.StreamCMD(uhd.types.StreamMode.num_done)
@@ -184,9 +186,14 @@ def main() -> None:
                           "still valid since the offset cancels in P_hot - P_cold, but log a real "
                           "value if you want absolute power sanity checks.")
     ap.add_argument("--antenna", type=str, default="RX2", choices=["RX2", "TX/RX"],
-                     help="B210 channel-0 antenna to receive on (default: RX2, this "
-                          "project's 'RX1 port'). Use TX/RX if your noise source is "
-                          "instead wired to the shared TX/RX SMA.")
+                     help="Antenna to receive on (default: RX2, this project's 'RX1 "
+                          "port'). Use TX/RX if your noise source is instead wired to "
+                          "the shared TX/RX SMA.")
+    ap.add_argument("--channel", type=int, default=1, choices=[0, 1],
+                     help="UHD RX channel index. Default 1 -- confirmed via "
+                          "tx_tone_probe.py that this project's physical TX1/RX1 ports "
+                          "are channel 1 (subdev FE-TX1/FE-RX1), not channel 0 "
+                          "(FE-TX2/FE-RX2) used in early captures before this was found.")
     ap.add_argument("--samp-rate", type=float, default=2e6)
     ap.add_argument("--capture-s", type=float, default=0.05,
                      help="Capture duration per hot/cold measurement, seconds")
@@ -209,15 +216,16 @@ def main() -> None:
     if not args.dry_run:
         import uhd
         usrp = uhd.usrp.MultiUSRP()
-        usrp.set_rx_rate(args.samp_rate)
-        usrp.set_rx_freq(uhd.types.TuneRequest(args.freq))
-        # The B210's channel-0 antennas are named 'TX/RX' and 'RX2' -- there
-        # is no literal 'RX1' antenna string. This project's "RX1 port"
-        # label refers to the dedicated-receive 'RX2' antenna on channel 0
-        # (confirmed against the physical connection on the bench this was
-        # verified against; if your wiring differs, change this).
-        usrp.set_rx_antenna(args.antenna)
-        usrp.set_rx_agc(False)
+        usrp.set_rx_rate(args.samp_rate, args.channel)
+        usrp.set_rx_freq(uhd.types.TuneRequest(args.freq), args.channel)
+        # The B210's antennas are named 'TX/RX' and 'RX2' -- there is no
+        # literal 'RX1' antenna string. This project's "RX1 port" label
+        # refers to the dedicated-receive 'RX2' antenna on channel 1
+        # (subdev FE-RX1), confirmed empirically with tx_tone_probe.py by
+        # transmitting a known tone on TX1 (channel 1, FE-TX1) through the
+        # attenuator and checking which RX channel actually received it.
+        usrp.set_rx_antenna(args.antenna, args.channel)
+        usrp.set_rx_agc(False, args.channel)
 
     if args.gain_table:
         gain_table = load_gain_table(args.gain_table)
@@ -226,7 +234,7 @@ def main() -> None:
             print("NOTE: --auto-gain with --dry-run uses a nominal 0-76 dB / "
                   "1 dB-step placeholder, not a device-verified table. Run "
                   "without --dry-run on real hardware for actual gain values.")
-        gain_table = build_auto_gain_list(usrp, args.dry_run, args.gain_step_db)
+        gain_table = build_auto_gain_list(usrp, args.dry_run, args.gain_step_db, args.channel)
 
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -239,9 +247,9 @@ def main() -> None:
             if args.dry_run:
                 applied_gain = total_gain_db
             else:
-                usrp.set_rx_gain(total_gain_db)
+                usrp.set_rx_gain(total_gain_db, args.channel)
                 time.sleep(args.settle_s)
-                applied_gain = usrp.get_rx_gain()
+                applied_gain = usrp.get_rx_gain(args.channel)
 
             print(f"[Gain_Index={gain_index}] requested={total_gain_db:.2f} dB "
                   f"applied={applied_gain:.2f} dB")
@@ -258,11 +266,11 @@ def main() -> None:
             else:
                 prompt_noise_source("OFF")
                 time.sleep(args.settle_s)
-                p_cold = capture_power(usrp, args.capture_s, args.dbm_offset)
+                p_cold = capture_power(usrp, args.capture_s, args.dbm_offset, args.channel)
 
                 prompt_noise_source("ON")
                 time.sleep(args.settle_s)
-                p_hot = capture_power(usrp, args.capture_s, args.dbm_offset)
+                p_hot = capture_power(usrp, args.capture_s, args.dbm_offset, args.channel)
 
                 prompt_noise_source("OFF")
 

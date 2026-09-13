@@ -123,6 +123,20 @@ AD9361_Noise_Figure_Measurement/
 
 ## Known Gaps / Must-Fill Before Running
 
+- **Correction: early real-hardware captures used the wrong UHD channel.**
+  `real_power_vs_gain_*.png`, `signal_power_920MHz.png`, and
+  `signal_power_2190MHz*.png` were captured on UHD channel 0
+  (subdev `FE-RX2`/`FE-TX2`). `scripts/tx_tone_probe.py` later confirmed,
+  by transmitting a known tone on TX1 and checking which RX channel
+  actually received it, that this project's physical TX1/RX1 ports are
+  **channel 1** (subdev `FE-TX1`/`FE-RX1`), not channel 0. All scripts now
+  default `--channel`/`--rx-channel`/`--tx-channel` to 1. The channel-0
+  captures are kept in the repo as historical results (they're still
+  real, valid data — just from a different physical port than "RX1"),
+  but treat anything found on channel 0 as informational only. The
+  `snr_loopback_2190MHz.png` result (`run_snr_sweep_loopback.py`) is the
+  first capture confirmed on the correct channel, validated with a known
+  TX-generated tone rather than an ambient signal.
 - **AD9361 gain tables are not fabricated here.** `docs/gain_tables/*.csv`
   are templates with the Gain Index column populated and the Total Gain (dB)
   column left blank, for anyone who wants canonical AD9361 gain-index
