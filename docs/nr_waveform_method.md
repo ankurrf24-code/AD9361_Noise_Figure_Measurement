@@ -68,6 +68,57 @@ Requires the external project directory above to exist at that path (it's
 outside this repo, on a different local drive -- not a dependency this repo
 can install or vendor).
 
+## Actual GNU Radio flowgraph version
+
+`scripts/gnuradio_nr_tm_gain_sweep.py` does the same TM1.1 measurement but
+through a real GNU Radio flowgraph (`gr.top_block` with `uhd.usrp_sink` /
+`uhd.usrp_source` / `blocks.vector_source_c` / `blocks.vector_sink_c`),
+rather than the plain UHD Python API used in `run_nr_tm_snr_sweep.py`. Must
+be run with `radioconda`'s Python (has GNU Radio + UHD 4.8.0 installed),
+with `UHD_IMAGES_DIR` set to the system UHD's images directory (radioconda's
+own UHD didn't have the FPGA/firmware images downloaded):
+
+```
+set UHD_IMAGES_DIR=C:\Program Files\UHD\share\uhd\images
+C:\Users\ankur\radioconda\python.exe scripts\gnuradio_nr_tm_gain_sweep.py ^
+    --freq 2190e6 --bandwidth 5e6 --out data\raw\gr_nr_tm_snr_5MHz_2190MHz.csv
+```
+
+It reuses the same external project's waveform generator and channel 1
+(not the external project's own hardcoded channel 0 -- that project's
+`tx_b210.py`/`rx_capture_evm_ccdf.py` were not modified; this is a separate,
+self-contained flowgraph). The flowgraph starts once; gain is changed live
+via `usrp_source.set_gain()` between capture windows, which is the
+GNU-Radio-idiomatic way to sweep gain without restarting the flowgraph.
+
+### Results and a real discrepancy worth flagging
+
+`results/plots/gnuradio_nr_tm_snr_vs_gain_2190MHz.png`, full 77-point sweep:
+
+- **5 MHz**: ~8.9 dB SNR at Gain Index 76 -- matches the plain-UHD result
+  (~8.7 dB) closely.
+- **20 MHz**: ~2.4 dB SNR at Gain Index 76 -- this does **not** match the
+  plain-UHD result (~4.8 dB) well, and the discrepancy is real, not just
+  a fluke: the captured sample counts for the 20 MHz run varied wildly
+  (450K-770K samples per gain point, vs. the ~51K requested), while the
+  5 MHz run's counts stayed close to expected (~385K-390K, also more than
+  requested but far more consistent). The likely cause: this script
+  captures by `vector_sink.reset()` + `sleep()` + read `.data()`, which has
+  no hard guarantee on exactly when the reset takes effect relative to the
+  flowgraph's internal buffering -- at 30.72 Msps (20 MHz) far more samples
+  arrive per second than at 7.68 Msps (5 MHz), so any timing slop between
+  the gain change and the reset/capture window matters proportionally more,
+  and capture windows can end up including leftover buffered samples from
+  before the gain change stabilized. `run_nr_tm_snr_sweep.py`'s plain-UHD
+  approach avoids this entirely by requesting an exact sample count via a
+  synchronous `stream_cmd`, which is why it's the more trustworthy number
+  for actual analysis -- treat the GNU Radio version's 20 MHz result as
+  demonstrating "the flowgraph works and responds to gain in the right
+  direction," not as a precise SNR measurement. This is a real limitation
+  of the ad hoc buffering approach, not fixed here; a proper fix would
+  synchronize the capture window to stream tags/timestamps rather than
+  wall-clock sleeps.
+
 ## Fallback: this project's own simplified generator
 
 `scripts/nr_waveform.py` / `scripts/run_nr_snr_sweep.py` -- a self-contained,
