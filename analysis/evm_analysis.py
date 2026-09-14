@@ -61,6 +61,8 @@ def per_slot_evm_no_cfo(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_sl
     start = find_slot_start(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_slot)
     n_slots = (len(iq) - start) // samples_per_slot
     evm_list = []
+    eq_points = []  # equalized RX symbols, for a proper (channel-corrected) constellation plot
+    ref_points = []
 
     for s in range(n_slots):
         slot_start = start + s * samples_per_slot
@@ -86,8 +88,12 @@ def per_slot_evm_no_cfo(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_sl
         err = rx_eq - ref[valid]
         evm_rms = np.sqrt(np.mean(np.abs(err) ** 2) / np.mean(np.abs(ref[valid]) ** 2))
         evm_list.append(float(evm_rms * 100.0))
+        eq_points.append(rx_eq)
+        ref_points.append(ref[valid])
 
-    return np.array(evm_list), start, n_slots
+    eq_points = np.concatenate(eq_points) if eq_points else np.array([])
+    ref_points = np.concatenate(ref_points) if ref_points else np.array([])
+    return np.array(evm_list), start, n_slots, eq_points, ref_points
 
 
 def main() -> None:
@@ -109,7 +115,7 @@ def main() -> None:
     iq = load_iq(args.capture)
     fs = meta["sample_rate_hz"]
 
-    evm_list, start, n_slots = per_slot_evm_no_cfo(
+    evm_list, start, n_slots, eq_points, ref_points = per_slot_evm_no_cfo(
         iq, ref_grid, meta["n_fft"], meta["cp_first_samples"], meta["cp_normal_samples"], meta["samples_per_slot"]
     )
     ref_db, ccdf = ccdf_papr(iq[start:])
@@ -147,15 +153,23 @@ def main() -> None:
 
         fig, axes = plt.subplots(2, 2, figsize=(11, 9))
 
-        sys.path.insert(0, EXTERNAL_WAVEFORM_DIR)
-        from nr_tm_waveform import symbol_offset_within_slot
-        dmrs_offset = symbol_offset_within_slot(2, meta["n_fft"], meta["cp_first_samples"], meta["cp_normal_samples"])
-        sym = iq[start + dmrs_offset: start + dmrs_offset + meta["n_fft"]]
-        const = np.fft.fftshift(np.fft.fft(sym) / np.sqrt(meta["n_fft"]))
-        dmrs_col = ref_grid[0, :, 2]
-        dmrs_idx = np.nonzero(dmrs_col)[0][0::2]
-        axes[0, 0].scatter(const[dmrs_idx].real, const[dmrs_idx].imag, s=8, alpha=0.7, label="1 slot, DM-RS REs")
-        axes[0, 0].set_title(f"DM-RS constellation (1 slot, {meta['modulation']}, no CFO corr)")
+        # Channel-EQUALIZED constellation, aggregated across every slot in
+        # the capture (eq_points/ref_points from per_slot_evm_no_cfo) --
+        # NOT the raw single-symbol FFT output. Plotting raw (unequalized)
+        # samples here was a real bug in an earlier version of this script:
+        # the reported EVM was already computed correctly with per-slot
+        # phase-ramp equalization, but the constellation PICTURE skipped
+        # that step, so it showed the signal still rotated/scaled by an
+        # arbitrary channel phase and gain -- looking "unclear" even when
+        # the actual EVM was good.
+        if len(eq_points):
+            axes[0, 0].scatter(eq_points.real, eq_points.imag, s=3, alpha=0.15, color="tab:blue",
+                                label=f"RX (equalized), {len(eq_points)} REs")
+            ideal_pts = np.unique(ref_points)
+            axes[0, 0].scatter(ideal_pts.real, ideal_pts.imag, s=120, marker="+", color="red",
+                                linewidths=2, label="ideal QPSK points", zorder=5)
+        axes[0, 0].set_title(f"Equalized DM-RS constellation, all {n_slots} slots "
+                              f"({meta['modulation']}, no CFO corr)")
         axes[0, 0].set_aspect("equal")
         axes[0, 0].legend(fontsize=7)
         axes[0, 0].grid(alpha=0.3)
