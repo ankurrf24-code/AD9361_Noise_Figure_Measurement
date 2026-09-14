@@ -186,6 +186,34 @@ peak fraction was 0.24 at TX=70/RX=60, with real margin left before the
 0.9 overload threshold, but it will not stay small indefinitely as either
 gain increases further.
 
+## Final clean result set (TX gain = 70 dB, corrected constellation plotting)
+
+Full sweep across four RX gain indices, both fixes applied (TX gain 70 dB,
+constellation plot showing equalized points not raw FFT output):
+
+| RX Gain Index | SNR (dB) | EVM RMS (%) | EVM std (%) | OBW vs nominal | ADC Peak Frac |
+|---|---|---|---|---|---|
+| 40 | 20.87 | 8.57 | 0.86 | 99.6% | 0.028 |
+| 50 | 21.46 | 7.80 | 0.87 | 99.5% | 0.075 |
+| 60 | 21.87 | 7.58 | 0.80 | 99.5% | 0.280 |
+| 70 | 22.06 | **5.19** | 1.03 | 99.4% | **0.780** |
+
+All four give EVM comfortably within QPSK spec (~17.5%) and accurate
+occupied-bandwidth measurement (~99.5% of nominal everywhere, vs. 166-190%
+at the earlier low-SNR/TX=50dB settings -- noise was inflating that
+measurement before). SNR is essentially flat (~21-22 dB) across this whole
+gain range -- expected once signal is well above any fixed noise floor,
+since RX gain amplifies signal and noise together and only shifts the
+absolute level, not the ratio, until ADC saturation.
+
+**Caution on RX Gain Index 70 at this TX gain**: ADC peak fraction is 0.78,
+approaching the 0.9 overload threshold used elsewhere in this project.
+Not clipping yet, but there is little headroom left -- don't combine
+RX Gain Index above ~70 with TX gain 70 dB without rechecking
+`analysis/detailed_analysis.py`'s ADC_Peak_Frac column first. RX Gain
+Index 60 is the safer choice with real margin (0.28) and EVM already
+excellent (7.58%).
+
 ## File naming
 
 `capture/chainA_gain{N}_tx{on|off}.bin` -- interleaved complex64 (GNU
