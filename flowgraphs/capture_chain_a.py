@@ -42,7 +42,10 @@ DEFAULT_BANDWIDTH_HZ = 5e6  # see docs/parameters.md: 20 MHz underflows
                             # heavily even TX-alone on this machine/UHD
                             # version -- a real USB throughput ceiling, not
                             # a bug. 5 MHz is the verified-stable default.
-DEFAULT_TX_GAIN_DB = 50.0
+DEFAULT_TX_GAIN_DB = 70.0  # see docs/parameters.md "TX gain fix": 50 dB gave
+# only ~8-13 dB SNR (EVM 24-100%+ depending on RX gain); 70 dB gives ~22 dB
+# SNR at RX Gain Index 60 and EVM=8.0% RMS, comfortably within QPSK spec,
+# with ADC headroom still safe (peak frac 0.24 of full scale).
 DEFAULT_TM = "TM1.1"
 DEFAULT_CHANNEL = 1  # Chain A
 DEFAULT_DURATION_S = 1.0

@@ -154,6 +154,38 @@ built-in sanity check that the whole pipeline (sync, equalization, EVM
 math) is behaving correctly, not silently producing plausible-looking
 numbers from garbage input.
 
+## TX gain fix: the real limit was TX power, not demodulation
+
+User question after seeing high EVM at every gain index tested: is the
+limit TX gain or demodulation? Tested directly rather than guessing:
+raised TX gain from 50 dB to 70 dB (B210 TX range goes to ~89.8 dB, so
+50 dB was leaving ~40 dB of headroom completely unused) at RX Gain Index
+60, and re-measured everything on a real capture:
+
+| | TX=50dB, RX=60 | TX=70dB, RX=60 |
+|---|---|---|
+| SNR (spectral) | 10.62 dB | **21.87 dB** |
+| EVM RMS | 34.4% (std 6.5%) | **8.02%** (std 0.77%) |
+| Occupied BW vs nominal | 174% (noise-inflated) | **99.5%** (accurate) |
+| ADC peak fraction | 0.031 | 0.24 (still far from the 0.9 overload line) |
+
+8.02% RMS EVM is comfortably within the typical QPSK spec (~17.5%), and
+the occupied-bandwidth measurement becoming accurate (99.5% vs. 174% of
+nominal) is itself a symptom of the earlier low-SNR problem -- noise energy
+outside the true signal band was being counted as "occupied" at low SNR.
+
+**Conclusion: TX gain was the actual limiting factor, not demodulation.**
+The demod/EVM pipeline (matched-filter slot sync, DM-RS equalization) was
+already working correctly -- it was just being asked to extract a QPSK
+symbol from a signal that hadn't been transmitted with enough power to give
+a clean answer at the RX gains tested. Default TX gain in
+`flowgraphs/capture_chain_a.py` is now 70 dB (was 50 dB). ADC headroom
+should be re-checked (via `analysis/detailed_analysis.py`) if you push RX
+gain higher than 60 at this TX gain, or push TX gain higher still --
+peak fraction was 0.24 at TX=70/RX=60, with real margin left before the
+0.9 overload threshold, but it will not stay small indefinitely as either
+gain increases further.
+
 ## File naming
 
 `capture/chainA_gain{N}_tx{on|off}.bin` -- interleaved complex64 (GNU
