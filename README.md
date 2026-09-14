@@ -20,9 +20,19 @@ Radio, then analyze spectrum and SNR in Python.
    single-session USB device and a second process cannot open it while
    another already holds it (found the hard way; see
    [docs/parameters.md](docs/parameters.md)).
-2. **Analyze** ([analysis/analyze_iq.py](analysis/analyze_iq.py)) -- plain
-   Python (no GNU Radio needed): loads the `.bin` captures, plots spectrum
-   via FFT, computes SNR, and compares TX OFF vs TX ON at each gain index.
+2. **Analyze**:
+   - [analysis/analyze_iq.py](analysis/analyze_iq.py) -- spectrum (FFT) +
+     wideband SNR, TX OFF vs TX ON comparison.
+   - [analysis/detailed_analysis.py](analysis/detailed_analysis.py) --
+     power/PAPR/ADC-headroom stats, raw IQ density, time-domain view.
+   - [analysis/evm_analysis.py](analysis/evm_analysis.py) -- **real EVM**
+     and demodulated constellation, reusing (and fixing one bug in) the
+     external NR test-vector project's proven CP-sync + DM-RS-equalization
+     pipeline. See [docs/parameters.md](docs/parameters.md) for what was
+     found and fixed, and why the remaining ~27.5% EVM at Gain Index 70 is
+     explained by this loopback path's SNR, not a defect.
+
+   All plain Python, no GNU Radio needed for analysis.
 
 See [docs/parameters.md](docs/parameters.md) for the exact fixed
 gain/bandwidth values used, why 5 MHz (not 20 MHz) is the working default,
@@ -68,8 +78,11 @@ noise stays flat -- the clean signature of a real detected signal.
 ├── flowgraphs/
 │   └── capture_chain_a.py      GNU Radio: generate + transmit + capture, Chain A
 ├── analysis/
-│   └── analyze_iq.py           Spectrum (FFT) + SNR analysis, TX on/off comparison
-└── capture/                    IQ .bin files land here (gitignored)
+│   ├── analyze_iq.py           Spectrum (FFT) + SNR analysis, TX on/off comparison
+│   ├── detailed_analysis.py    Power/PAPR/ADC headroom, IQ density, time-domain
+│   ├── ofdm_demod_constellation.py  Basic CP-sync + FFT demod (superseded by evm_analysis.py)
+│   └── evm_analysis.py         Real EVM + constellation (DM-RS equalized)
+└── capture/                    IQ .bin files + tx_waveforms/ land here (gitignored)
 ```
 
 ## Known Limitations

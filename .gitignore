@@ -1,6 +1,6 @@
 __pycache__/
 *.pyc
-capture/*.bin
-results/*.png
+capture/*
+results/*
 !capture/.gitkeep
 !results/.gitkeep

@@ -23,9 +23,11 @@ consumed directly by analysis/analyze_iq.py.
 """
 
 import argparse
+import json
 import os
 import sys
 import time
+from datetime import datetime, timezone
 
 if "UHD_IMAGES_DIR" not in os.environ:
     for _candidate in (r"C:\Program Files\UHD\share\uhd\images",):
@@ -46,26 +48,35 @@ DEFAULT_CHANNEL = 1  # Chain A
 DEFAULT_DURATION_S = 1.0
 
 
-def build_waveform(tm, bandwidth_hz, num_frames=4, seed=1):
+def generate_waveform_file(tm, bandwidth_hz, num_frames, seed, out_dir):
+    """Generate (if not already present) the .iq.bin/_ref.npy/_meta.json
+    triplet using the external project's own generate() function -- same
+    format their analysis/iq_analysis.py expects, including the saved ideal
+    reference grid needed for real EVM (which this project's earlier
+    in-memory-only generation did not keep)."""
     sys.path.insert(0, NR_TM_PROJECT_DIR)
-    import numpy as np
     import nr_tm_waveform as gen
-    import nr_tm_config as cfg
 
-    modulation = cfg.TM_TABLE[tm]["modulation"]
-    num = gen.pick_numerology(bandwidth_hz)
-    n_fft, n_rb = num["n_fft"], num["n_rb"]
+    name = f"{tm.replace('.', '_')}_{int(bandwidth_hz/1e6)}MHz_30kHz"
+    meta_path = os.path.join(out_dir, f"{name}_meta.json")
+    if not os.path.exists(meta_path):
+        gen.generate(tm, bandwidth_hz, num_frames, seed, out_dir)
+    return meta_path
 
-    rng = np.random.default_rng(seed)
-    slots = []
-    for _ in range(num_frames * cfg.SLOTS_PER_FRAME):
-        grid, _ = gen.build_resource_grid(n_rb, n_fft, modulation, rng)
-        slots.append(gen.ofdm_modulate_slot(grid, n_fft, num["cp_first"], num["cp_normal"]))
 
-    iq = np.concatenate(slots).astype(np.complex64)
-    peak = np.max(np.abs(iq))
-    iq_norm = (iq / peak * 0.5).astype(np.complex64)
-    return iq_norm, num["sample_rate_hz"], num["occupied_bw_hz"], n_rb, n_fft
+def load_waveform_file(meta_path):
+    """Load the interleaved-float32 .iq.bin next to meta_path -- same format
+    the external project's analysis/iq_analysis.py::load_iq() reads, so
+    captures made from this file are directly analyzable with that script
+    unmodified."""
+    import numpy as np
+
+    with open(meta_path) as f:
+        meta = json.load(f)
+    iq_path = os.path.join(os.path.dirname(meta_path), meta["iq_file"])
+    raw = np.fromfile(iq_path, dtype=np.float32)
+    iq = (raw[0::2] + 1j * raw[1::2]).astype(np.complex64)
+    return iq, meta
 
 
 def main():
@@ -88,9 +99,15 @@ def main():
     tb = gr.top_block()
 
     if args.tx_state == "on":
-        iq, samp_rate, occupied_bw, n_rb, n_fft = build_waveform(args.tm, args.bandwidth, args.num_frames, args.seed)
+        wf_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "capture", "tx_waveforms")
+        os.makedirs(wf_dir, exist_ok=True)
+        wf_meta_path = generate_waveform_file(args.tm, args.bandwidth, args.num_frames, args.seed, wf_dir)
+        iq, wf_meta = load_waveform_file(wf_meta_path)
+        samp_rate = wf_meta["sample_rate_hz"]
+        occupied_bw, n_rb, n_fft = wf_meta["occupied_bw_hz"], wf_meta["n_rb"], wf_meta["n_fft"]
         print(f"[TX] {args.tm}: N_RB={n_rb} N_FFT={n_fft} samp_rate={samp_rate/1e6:.2f} Msps "
-              f"occupied_bw={occupied_bw/1e6:.3f} MHz ({len(iq)} samples, looping)")
+              f"occupied_bw={occupied_bw/1e6:.3f} MHz ({len(iq)} samples, looping) "
+              f"-- loaded from {wf_meta_path}")
         vector_source = blocks.vector_source_c(iq.tolist(), repeat=True)
         usrp_sink = uhd.usrp_sink(",".join([]), uhd.stream_args(cpu_format="fc32", channels=[args.channel]))
         usrp_sink.set_samp_rate(samp_rate)
@@ -102,6 +119,7 @@ def main():
               f"gain={usrp_sink.get_gain(0):.1f} dB antenna={usrp_sink.get_antenna(0)}")
     else:
         samp_rate = {5e6: 7.68e6, 20e6: 30.72e6}[args.bandwidth]
+        occupied_bw = n_rb = n_fft = wf_meta_path = None
 
     usrp_source = uhd.usrp_source(",".join([]), uhd.stream_args(cpu_format="fc32", channels=[args.channel]))
     usrp_source.set_samp_rate(samp_rate)
@@ -154,7 +172,35 @@ def main():
     tb.stop()
     tb.wait()
 
+    meta = {
+        "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "chain": "A",
+        "uhd_channel": args.channel,
+        "freq_hz": args.freq,
+        "bandwidth_hz": args.bandwidth,
+        "samp_rate_hz": samp_rate,
+        "gain_index": args.gain_index,
+        "rx_gain_applied_db": usrp_source.get_gain(0),
+        "rx_antenna": usrp_source.get_antenna(0),
+        "tx_state": args.tx_state,
+        "tx_gain_db": args.tx_gain if args.tx_state == "on" else None,
+        "tx_antenna": "TX/RX" if args.tx_state == "on" else None,
+        "tm": args.tm if args.tx_state == "on" else None,
+        "tx_waveform_meta_file": wf_meta_path if args.tx_state == "on" else None,
+        "n_rb": n_rb,
+        "occupied_bw_hz": occupied_bw,
+        "warmup_s": warmup_s,
+        "capture_duration_s": args.duration,
+        "num_samples": capture_samps,
+        "iq_format": "interleaved complex64 (GNU Radio gr_complex)",
+        "bin_file": os.path.basename(out_path),
+    }
+    meta_path = out_path.replace(".bin", "_meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+
     print(f"[RX] Done. Wrote {out_path}")
+    print(f"[RX] Wrote metadata {meta_path}")
 
 
 if __name__ == "__main__":

@@ -89,6 +89,71 @@ At Gain Index 70, turning TX on raises in-band power by ~8.7 dB while
 out-of-band noise stays flat (within 0.1 dB) -- the clean signature of a
 real detected signal, not noise or an artifact.
 
+## EVM analysis: reused external tooling, found and fixed one bug in it
+
+The raw-IQ "constellation" in `analysis/detailed_analysis.py` is exactly
+that -- raw time-domain samples, not demodulated symbols. OFDM time
+samples are the IFFT sum of many subcarriers, so by the Central Limit
+Theorem they look like Gaussian noise in time regardless of SNR; a real
+constellation only exists per-subcarrier after CP removal + FFT. For a
+proper EVM measurement (not just an illustrative demod), `analysis/
+evm_analysis.py` reuses the external NR test-vector project's own
+proven pipeline (`analysis/iq_analysis.py`): full-cycle matched-filter
+slot sync, DM-RS-based single-tap magnitude + linear-phase-ramp channel
+equalization, occupied bandwidth, PAPR/CCDF, IQ imbalance.
+
+To use it, TX now transmits from a properly generated `.iq.bin`/`_ref.npy`/
+`_meta.json` triplet (via that project's own `generate()` function,
+producing `capture/tx_waveforms/`) instead of the in-memory-only waveform
+generation used earlier -- the saved ideal reference grid is required for
+real EVM comparison and wasn't being kept before.
+
+### Bug found and fixed: per-symbol CFO correction was actively harmful here
+
+First real capture at Gain Index 70 gave a badly unstable EVM: 49.3% RMS,
+std 31.8% across frames, phase-noise proxy 289 deg RMS (should be a few
+degrees), residual CFO reported as an implausible -7.19 Hz while EVM was
+catastrophic -- exactly the warning sign the original script's own comments
+describe ("if the estimate looks implausibly small while EVM is high,
+suspect CFO above this [+/-1kHz] Nyquist limit").
+
+Investigated directly: measured the raw per-symbol CP-based (Moose) CFO
+estimate across 2000 symbols. Result: mean -816 Hz, but **std 113,883 Hz**,
+spanning almost exactly the estimator's full +/-213 kHz theoretical range
+(`fs / (2*cp_normal)` = 7.68 MHz / 36 = 213 kHz) -- i.e. essentially random
+noise, not a real large CFO. Root cause: this project's 5 MHz/30 kHz-SCS
+waveform has an 18-sample cyclic prefix, too short for a reliable Moose
+phase estimate at this SNR. Applying that "correction" injects near-random
+phase rotation into every symbol instead of fixing anything.
+
+**Fix**: `evm_analysis.py`'s `per_slot_evm_no_cfo()` is the same slot-sync
+and DM-RS equalization as the original, with the per-symbol CFO correction
+step removed. Verified on the same capture: EVM drops to a stable,
+reproducible **27.5% RMS (std 1.9%)**.
+
+### Is 27.5% EVM at Gain Index 70 a problem?
+
+No -- it's explained by SNR, not a defect. This project's independent
+spectral SNR measurement at Gain Index 70 was ~9.4 dB (see the SNR
+analysis results above). The theoretical EVM floor from SNR alone is
+`1/sqrt(SNR_linear)` = `1/sqrt(10^0.94)` ~= 34% at 9.4 dB -- in the same
+ballpark as the measured 27.5%. The remaining EVM is consistent with this
+loopback path's actual SNR at this gain setting, not a hidden hardware
+fault. To get EVM within typical QPSK spec (~17.5%), the fix would be
+improving the path's SNR (e.g. re-tuning TX/RX gain, reducing path loss),
+not further DSP changes.
+
+### Sanity check: Gain Index 10 gives EVM > 100%
+
+As expected given everything found earlier in this project (signal
+undetectable below the noise floor at low gain index): EVM at Gain Index
+10 comes out to 152% RMS -- above 100% means the "demodulated" symbols are
+essentially uncorrelated with the reference, i.e. pure noise, exactly what
+should happen when there's no real recoverable signal. This is a useful
+built-in sanity check that the whole pipeline (sync, equalization, EVM
+math) is behaving correctly, not silently producing plausible-looking
+numbers from garbage input.
+
 ## File naming
 
 `capture/chainA_gain{N}_tx{on|off}.bin` -- interleaved complex64 (GNU
