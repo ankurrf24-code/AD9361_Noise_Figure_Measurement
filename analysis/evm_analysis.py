@@ -44,16 +44,31 @@ EXTERNAL_ANALYSIS_DIR = r"D:\USRP B210\RF test vector B210 _claude\analysis"
 EXTERNAL_WAVEFORM_DIR = r"D:\USRP B210\RF test vector B210 _claude\waveform_gen"
 
 
-def per_slot_evm_no_cfo(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_slot, dmrs_symbol=2):
+def per_slot_evm_no_cfo(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_slot, dmrs_symbol=2,
+                         full_slot_constellation=False, max_slots_for_plot=300):
     """Same as iq_analysis.per_slot_evm but WITHOUT the per-symbol CP-based
     CFO correction -- see module docstring for why that correction is
-    actively harmful for this project's short (18-sample) CP at this SNR."""
+    actively harmful for this project's short (18-sample) CP at this SNR.
+
+    EVM itself (evm_list) is still computed from DM-RS REs only, unchanged,
+    for comparability with every EVM number already reported by this
+    project. If full_slot_constellation=True, the SAME per-slot DM-RS-
+    derived channel estimate (h_model) is additionally applied to every
+    subcarrier of every OFDM symbol in the slot (not just the DM-RS
+    symbol's pilot REs) and compared against the full known reference grid
+    -- since this is a self-referenced test signal, the true value of every
+    RE (pilot and data) is known, so this gives a much denser, more
+    representative "spectrum-analyzer style" constellation (~1850 points/
+    slot instead of ~66) without changing the reported EVM math at all.
+    Capped at max_slots_for_plot slots purely to keep plotting fast."""
     sys.path.insert(0, EXTERNAL_WAVEFORM_DIR)
     from nr_tm_waveform import symbol_offset_within_slot
+    import nr_tm_config as cfg
 
     dmrs_col = ref_grid[0, :, dmrs_symbol]
     dmrs_idx = np.nonzero(dmrs_col)[0][0::2]
     dmrs_offset = symbol_offset_within_slot(dmrs_symbol, n_fft, cp_first, cp_normal)
+    all_sc_idx = np.nonzero(dmrs_col)[0]  # every allocated subcarrier (pilot + data)
 
     sys.path.insert(0, EXTERNAL_ANALYSIS_DIR)
     from iq_analysis import find_slot_start
@@ -63,6 +78,8 @@ def per_slot_evm_no_cfo(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_sl
     evm_list = []
     eq_points = []  # equalized RX symbols, for a proper (channel-corrected) constellation plot
     ref_points = []
+    full_eq_points = []
+    full_ref_points = []
 
     for s in range(n_slots):
         slot_start = start + s * samples_per_slot
@@ -91,9 +108,29 @@ def per_slot_evm_no_cfo(iq, ref_grid, n_fft, cp_first, cp_normal, samples_per_sl
         eq_points.append(rx_eq)
         ref_points.append(ref[valid])
 
+        if full_slot_constellation and s < max_slots_for_plot:
+            # Same channel model (assumed static across the ~0.5ms slot,
+            # reasonable for a loopback/cable path with negligible
+            # multipath), applied to every symbol's full subcarrier set.
+            h_full = mag_avg * np.exp(1j * (slope * all_sc_idx + intercept))
+            for l in range(cfg.SYMBOLS_PER_SLOT):
+                sym_offset = symbol_offset_within_slot(l, n_fft, cp_first, cp_normal)
+                s_start = slot_start + sym_offset
+                if s_start + n_fft > len(iq):
+                    continue
+                sym_l = iq[s_start:s_start + n_fft]
+                freq_l = np.fft.fftshift(np.fft.fft(sym_l) / np.sqrt(n_fft))
+                ref_l = ref_grid[s % ref_grid.shape[0], all_sc_idx, l]
+                rx_l = freq_l[all_sc_idx] / h_full
+                v = np.abs(ref_l) > 0
+                full_eq_points.append(rx_l[v])
+                full_ref_points.append(ref_l[v])
+
     eq_points = np.concatenate(eq_points) if eq_points else np.array([])
+    full_eq_points = np.concatenate(full_eq_points) if full_eq_points else np.array([])
+    full_ref_points = np.concatenate(full_ref_points) if full_ref_points else np.array([])
     ref_points = np.concatenate(ref_points) if ref_points else np.array([])
-    return np.array(evm_list), start, n_slots, eq_points, ref_points
+    return np.array(evm_list), start, n_slots, eq_points, ref_points, full_eq_points, full_ref_points
 
 
 def main() -> None:
@@ -115,8 +152,9 @@ def main() -> None:
     iq = load_iq(args.capture)
     fs = meta["sample_rate_hz"]
 
-    evm_list, start, n_slots, eq_points, ref_points = per_slot_evm_no_cfo(
-        iq, ref_grid, meta["n_fft"], meta["cp_first_samples"], meta["cp_normal_samples"], meta["samples_per_slot"]
+    evm_list, start, n_slots, eq_points, ref_points, full_eq_points, full_ref_points = per_slot_evm_no_cfo(
+        iq, ref_grid, meta["n_fft"], meta["cp_first_samples"], meta["cp_normal_samples"], meta["samples_per_slot"],
+        full_slot_constellation=args.plot
     )
     ref_db, ccdf = ccdf_papr(iq[start:])
     obw = occupied_bandwidth_hz(iq, fs, start=start)
@@ -153,26 +191,39 @@ def main() -> None:
 
         fig, axes = plt.subplots(2, 2, figsize=(11, 9))
 
-        # Channel-EQUALIZED constellation, aggregated across every slot in
-        # the capture (eq_points/ref_points from per_slot_evm_no_cfo) --
-        # NOT the raw single-symbol FFT output. Plotting raw (unequalized)
-        # samples here was a real bug in an earlier version of this script:
-        # the reported EVM was already computed correctly with per-slot
-        # phase-ramp equalization, but the constellation PICTURE skipped
-        # that step, so it showed the signal still rotated/scaled by an
-        # arbitrary channel phase and gain -- looking "unclear" even when
-        # the actual EVM was good.
-        if len(eq_points):
-            axes[0, 0].scatter(eq_points.real, eq_points.imag, s=3, alpha=0.15, color="tab:blue",
-                                label=f"RX (equalized), {len(eq_points)} REs")
-            ideal_pts = np.unique(ref_points)
-            axes[0, 0].scatter(ideal_pts.real, ideal_pts.imag, s=120, marker="+", color="red",
+        # Spectrum-analyzer-style constellation: EVERY resource element
+        # (pilot + data, all 14 symbols/slot) equalized with the same
+        # per-slot DM-RS-derived channel model, not just the sparse DM-RS
+        # REs -- since this is a self-referenced test signal, the true
+        # value of every RE is known, so this is legitimate (not something
+        # possible with an unknown over-the-air signal). Rendered as a 2D
+        # histogram ("persistence" style, like a real VSA) rather than a
+        # scatter, since there are up to ~500K points -- a plain scatter at
+        # that density is either too slow or just a solid blob; a density
+        # plot is what shows the actual cluster structure clearly. Earlier
+        # versions of this script plotted (a) raw, unequalized single-
+        # symbol output, then (b) only the ~66 DM-RS REs/slot equalized --
+        # both real, fixed limitations, not stylistic choices.
+        plot_points = full_eq_points if len(full_eq_points) else eq_points
+        plot_ref = full_ref_points if len(full_ref_points) else ref_points
+        if len(plot_points):
+            lim = 1.8
+            axes[0, 0].hist2d(plot_points.real, plot_points.imag, bins=140,
+                               range=[[-lim, lim], [-lim, lim]], cmap="turbo", cmin=1)
+            theta = np.linspace(0, 2 * np.pi, 200)
+            axes[0, 0].plot(np.cos(theta), np.sin(theta), color="white", linewidth=0.6, alpha=0.5)
+            axes[0, 0].axhline(0, color="white", linewidth=0.5, alpha=0.4)
+            axes[0, 0].axvline(0, color="white", linewidth=0.5, alpha=0.4)
+            ideal_pts = np.unique(plot_ref)
+            axes[0, 0].scatter(ideal_pts.real, ideal_pts.imag, s=90, marker="+", color="white",
                                 linewidths=2, label="ideal QPSK points", zorder=5)
-        axes[0, 0].set_title(f"Equalized DM-RS constellation, all {n_slots} slots "
-                              f"({meta['modulation']}, no CFO corr)")
+            axes[0, 0].set_xlim(-lim, lim)
+            axes[0, 0].set_ylim(-lim, lim)
+        axes[0, 0].set_title(f"Equalized constellation (all REs, all symbols), {n_slots} slots\n"
+                              f"({meta['modulation']}, no CFO corr) -- {len(plot_points)} points")
         axes[0, 0].set_aspect("equal")
-        axes[0, 0].legend(fontsize=7)
-        axes[0, 0].grid(alpha=0.3)
+        axes[0, 0].set_facecolor("black")
+        axes[0, 0].legend(fontsize=7, loc="upper right")
 
         axes[0, 1].plot(evm_list)
         axes[0, 1].set_title(f"EVM per slot (%) -- mean={np.mean(evm_list):.1f}%, std={np.std(evm_list):.1f}%")
