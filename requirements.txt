@@ -1,5 +1,7 @@
 numpy
 matplotlib
-# uhd (UHD Python bindings) is typically installed system-wide alongside the
-# UHD driver package rather than via pip -- see
-# https://files.ettus.com/manual/page_install.html
+# GNU Radio + UHD (used by flowgraphs/tx_chain_a.py and rx_chain_a_capture.py)
+# are NOT installed via this file -- they come from the radioconda
+# distribution at C:\Users\ankur\radioconda. Run those two scripts with
+# C:\Users\ankur\radioconda\python.exe, not the interpreter these
+# requirements are installed into.

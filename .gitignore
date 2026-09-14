@@ -1,8 +1,6 @@
 __pycache__/
 *.pyc
-data/raw/*.csv
-data/processed/*.csv
-results/plots/*.png
-!data/raw/.gitkeep
-!data/processed/.gitkeep
-!results/plots/.gitkeep
+capture/*.bin
+results/*.png
+!capture/.gitkeep
+!results/.gitkeep
